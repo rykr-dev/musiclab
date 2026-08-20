@@ -1,0 +1,13 @@
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; padding: 0; height: 100%; }
+body { background: #111320; overflow: hidden; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #14162a; }
+::-webkit-scrollbar-thumb { background: #2e3349; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #3a4059; }
+html, body { overscroll-behavior: none; }
+
+
+/* Any element we drag on must own the gesture, or the browser pans/selects the page instead. */
+canvas, .dragsurface { touch-action: none; }
+canvas, img, svg { -webkit-user-drag: none; user-select: none; }

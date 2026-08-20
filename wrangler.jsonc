@@ -1,0 +1,14 @@
+{
+  // IMPORTANT: "name" must match your existing Worker's name in the Cloudflare
+  // dashboard, or `wrangler deploy` will create a second Worker instead of
+  // updating the one your custom domain points at.
+  "name": "music-lab",
+
+  "compatibility_date": "2026-08-20",
+
+  // Static-assets-only Worker: no server code, Cloudflare just serves ./dist.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

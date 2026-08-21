@@ -1,10 +1,74 @@
+/* ================= faces =================
+   Self-hosted, not CDN-linked: the app is a static-assets Worker with no backend,
+   and it has to keep working on a school laptop with a locked-down network. Both
+   files are variable, so the whole weight range costs one request each. */
+@font-face {
+  font-family: "Archivo";
+  src: url("/fonts/archivo-latin.woff2") format("woff2");
+  font-weight: 400 800;
+  font-stretch: 62% 125%;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* Only fetched when a song title actually contains one of these — accented titles
+   render correctly without costing everyone else the bytes. */
+@font-face {
+  font-family: "Archivo";
+  src: url("/fonts/archivo-latin-ext.woff2") format("woff2");
+  font-weight: 400 800;
+  font-stretch: 62% 125%;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Chivo Mono";
+  src: url("/fonts/chivomono-latin.woff2") format("woff2");
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; padding: 0; height: 100%; }
-body { background: #131418; overflow: hidden; }
+body {
+  background: #11100e;
+  overflow: hidden;
+  font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+  /* Light text on a dark panel gains apparent weight from subpixel rendering and
+     goes blobby at 9px. Grayscale AA holds the counters open at this density. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Form controls opt out of page typography unless told otherwise, and a single
+   default-font <select> in a rack of Archivo labels is instantly visible. */
+button, input, select, textarea, optgroup { font-family: inherit; }
+select option { background: #292724; color: #e2e0dc; }
+
+/* ================= browser surfaces =================
+   Selection, caret, scrollbars and focus ship in nobody's palette by default. */
+::selection { background: rgba(255, 148, 48, 0.3); color: #fff; }
+input, textarea { caret-color: #ff9430; }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #17181c; }
-::-webkit-scrollbar-thumb { background: #34383f; border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #454a52; }
+::-webkit-scrollbar-track { background: #16140f; }
+::-webkit-scrollbar-thumb { background: #403d39; border-radius: 5px; border: 2px solid #16140f; }
+::-webkit-scrollbar-thumb:hover { background: #565049; }
+::-webkit-scrollbar-corner { background: #16140f; }
+* { scrollbar-color: #403d39 #16140f; }
+
+/* Cyan, not orange: focus is the machine telling you where you are, and orange
+   already means "this control is engaged". */
+:focus-visible { outline: 2px solid #92f1f6; outline-offset: 1px; border-radius: 3px; }
+
 html, body { overscroll-behavior: none; }
 
 

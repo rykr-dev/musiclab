@@ -3,6 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#11100e" />
+    <!-- Preloaded so the chrome never paints in a fallback face and reflows. Only
+         the two faces every session uses; the latin-ext file stays on demand. -->
+    <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/chivomono-latin.woff2" as="font" type="font/woff2" crossorigin />
     <title>MUSIC LAB</title>
   </head>
   <body>

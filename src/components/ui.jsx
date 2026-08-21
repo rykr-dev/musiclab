@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { PANEL, PANEL2, RAISED, LINE, TEXT, DIM, ACCENT, DANGER, clamp } from "../constants";
+import { PANEL, PANEL2, RAISED, LINE, TEXT, DIM, ACCENT, DANGER, ON_ACCENT, TYPE, clamp } from "../constants";
 
 /* ================= small ui bits ================= */
 /* Typed-value parsing: strips units, understands "k" (1.5k = 1500) */
@@ -70,7 +70,7 @@ function Knob({ label, value, min, max, onChange, fmt, size = 38, log = false, p
         <line x1={cx} y1={cy} x2={cx + (r - 7) * Math.cos((ang * Math.PI) / 180)} y2={cy + (r - 7) * Math.sin((ang * Math.PI) / 180)}
           stroke={TEXT} strokeWidth={2} strokeLinecap="round" />
       </svg>
-      <div style={{ fontSize: 9, color: DIM, letterSpacing: 0.4 }}>{label}</div>
+      <div style={{ ...TYPE.micro, fontSize: 8, color: DIM }}>{label}</div>
       {editing ? (
         <input autoFocus defaultValue={fmt(value)}
           onFocus={(e) => e.target.select()}
@@ -82,11 +82,11 @@ function Knob({ label, value, min, max, onChange, fmt, size = 38, log = false, p
           onPointerDown={(e) => e.stopPropagation()}
           style={{
             width: size + 20, background: PANEL2, border: `1px solid ${ACCENT}`, borderRadius: 3,
-            color: TEXT, fontSize: 9, fontFamily: "ui-monospace, monospace", textAlign: "center", padding: "1px 2px",
+            ...TYPE.data, color: TEXT, fontSize: 9, textAlign: "center", padding: "1px 2px",
           }} />
       ) : (
         <div title="Click to type a value" onClick={() => setEditing(true)}
-          style={{ fontSize: 9, color: TEXT, fontFamily: "ui-monospace, monospace", cursor: "text" }}>{fmt(value)}</div>
+          style={{ ...TYPE.data, fontSize: 9, color: TEXT, cursor: "text" }}>{fmt(value)}</div>
       )}
     </div>
   );
@@ -94,9 +94,10 @@ function Knob({ label, value, min, max, onChange, fmt, size = 38, log = false, p
 function Btn({ children, on, onClick, title, danger, style }) {
   return (
     <button title={title} onClick={onClick} style={{
-      background: on ? ACCENT : PANEL2, color: on ? "#1a1200" : danger ? DANGER : TEXT,
+      ...(on ? TYPE.uiStrong : TYPE.ui),
+      background: on ? ACCENT : PANEL2, color: on ? ON_ACCENT : danger ? DANGER : TEXT,
       border: `1px solid ${on ? ACCENT : LINE}`, borderRadius: 4, padding: "4px 10px",
-      fontSize: 11, cursor: "pointer", fontWeight: on ? 700 : 500, letterSpacing: 0.3, ...style,
+      fontSize: 11, cursor: "pointer", ...style,
     }}>{children}</button>
   );
 }
@@ -104,7 +105,7 @@ function Btn({ children, on, onClick, title, danger, style }) {
 function Select({ value, options, onChange, width }) {
   return (
     <select value={value} onChange={(e) => onChange(e.target.value)} style={{
-      background: PANEL2, color: TEXT, border: `1px solid ${LINE}`, borderRadius: 4,
+      ...TYPE.ui, background: PANEL2, color: TEXT, border: `1px solid ${LINE}`, borderRadius: 4,
       padding: "3px 6px", fontSize: 11, width, cursor: "pointer",
     }}>
       {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -119,7 +120,7 @@ function RenameInput({ initial, onDone, width = 110 }) {
       onPointerDown={(e) => e.stopPropagation()}
       onBlur={(e) => onDone(e.target.value)}
       onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") onDone(initial); }}
-      style={{ background: PANEL2, border: `1px solid ${LINE}`, color: TEXT, fontSize: 11, borderRadius: 3, padding: "2px 4px", width }} />
+      style={{ ...TYPE.ui, background: PANEL2, border: `1px solid ${LINE}`, color: TEXT, fontSize: 11, borderRadius: 3, padding: "2px 4px", width }} />
   );
 }
 
@@ -155,7 +156,9 @@ function FloatWin({ title, color, x0, y0, w, z, onFocus, onClose, children, head
         }}>
         <span style={{ width: 8, height: 8, borderRadius: 2, background: color || ACCENT }} />
         <span title={onHeaderDoubleClick ? "Double-click to toggle fullscreen" : undefined}
-          style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: TEXT, flex: "0 0 auto" }}>{title}</span>
+          /* Condensed and tracked like the panel labels, but never uppercased: these
+             titles carry names the user typed, and "my cool beat" is not "MY COOL BEAT". */
+          style={{ ...TYPE.label, textTransform: "none", letterSpacing: "0.08em", fontSize: 10, color: TEXT, flex: "0 0 auto" }}>{title}</span>
         <div style={{ flex: 1, display: "flex", gap: 6, alignItems: "center" }} onPointerDown={(e) => e.stopPropagation()}>
           {headerExtras}
         </div>

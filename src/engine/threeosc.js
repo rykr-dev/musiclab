@@ -87,6 +87,7 @@ export class ThreeOsc {
     this.ctx = ctx;
     this.out = output;
     this.params = defaultThreeOsc();
+    this.pitchOffset = 0;         // channel-level tuning, in semitones (fractional = cents)
     this.voices = new Map();      // pitch -> array of voices (retriggers stack)
   }
 
@@ -98,6 +99,8 @@ export class ThreeOsc {
       oscs: (p.oscs || d.oscs).map((o, i) => ({ ...defaultOsc(), ...d.oscs[i], ...o })),
     };
   }
+
+  setPitchOffset(semis) { this.pitchOffset = semis || 0; }
 
   /* Builds one oscillator's source(s) into `dest`. Returns the started sources
      plus a mono tap of the raw (pre-pan) signal, used as the AM modulator. */
@@ -121,7 +124,7 @@ export class ThreeOsc {
         src = ctx.createOscillator();
         if ((o.phase ?? 0) > 0.002) src.setPeriodicWave(getPhasedWave(ctx, o.wave, o.phase));
         else src.type = o.wave;
-        src.frequency.value = midiToHz(pitch + (o.coarse || 0) + (o.fine || 0) / 100);
+        src.frequency.value = midiToHz(pitch + this.pitchOffset + (o.coarse || 0) + (o.fine || 0) / 100);
         src.detune.value = detuneCents;
       }
       if (sidePan == null) src.connect(g);

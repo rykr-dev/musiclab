@@ -156,6 +156,7 @@ export class Engine {
           node.program = null;
         }
         node.osc.setParams(c.instrument);
+        node.osc.setPitchOffset(c.pitch ?? 0);
         continue;                                          // built-in synth: no MIDI program work
       }
       if (node.osc) {                                      // switched back to a soundfont

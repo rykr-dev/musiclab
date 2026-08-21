@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   BG, PANEL, PANEL2, LINE, TEXT, DIM, ACCENT, ACCENT2, DANGER,
+  FONT_UI, TYPE, LCD_GLOW,
   PATTERN_COLORS, PL_BAR_W, SONG_BARS, N_TRACKS, ALT_LABEL, ROLL,
   uid, clamp, defaultReverb, bumpUid, DEFAULT_VEL, APP_NAME, SNAPS, CMD_LABEL,
 } from "./constants";
@@ -8,7 +9,7 @@ import { Knob, Btn, Select, RenameInput, FloatWin, numFrom, parsePan } from "./c
 import PianoRoll from "./components/PianoRoll";
 import { Engine } from "./engine/engine";
 import { listSaves, saveLocal, loadLocal, deleteLocal, encodeShare, decodeShare } from "./store";
-import { BUILTIN_SOUNDFONTS, fetchSoundfont, getCached, clearCached, looksLikeSoundfont } from "./soundfonts";
+import { BUILTIN_SOUNDFONTS, fetchSoundfont, getCached, looksLikeSoundfont } from "./soundfonts";
 import { defaultThreeOsc, WAVEFORMS } from "./engine/threeosc";
 
 /* ================= playlist playhead ================= */
@@ -207,7 +208,10 @@ export default function App() {
       assignPendingChannel();
     } catch (err) {
       console.error(err);
-      toast(`Couldn't load ${font.name}: ${err.message || err}`);
+      const notHosted = /not hosted|404/i.test(err.message || "");
+      toast(notHosted
+        ? `${font.name} isn't hosted yet — set VITE_SF_SGM_URL, or drop the .sf2 in public/soundfonts/`
+        : `Couldn't load ${font.name}: ${err.message || err}`);
     } finally {
       setSfLoading(false);
       setSfProgress(null);
@@ -215,17 +219,28 @@ export default function App() {
   };
 
   useEffect(() => { engineRef.current?.scheduler?.setBpm?.(bpm); }, [bpm]);
+  useEffect(() => { engineRef.current?.syncChannels(channels); }, [channels]);
+  useEffect(() => { engineRef.current?.syncInserts(inserts); }, [inserts]);
+
+  /* Browsers refuse to start an AudioContext outside a user gesture, so the
+     engine is never constructed from an effect — the first real click or keypress
+     anywhere boots it (3xOsc channels need the graph even with no soundfont). */
   useEffect(() => {
-    if (engineRef.current) { engineRef.current.syncChannels(channels); return; }
-    // A built-in synth needs the audio graph even though no soundfont was loaded.
-    if (channels.some((c) => c.instrument?.type === "3xosc")) {
+    const unlock = () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
       ensureEngine().then((eng) => {
         eng.syncChannels(stateRef.current.channels);
         eng.syncInserts(stateRef.current.inserts);
       }).catch((err) => console.error(err));
-    }
-  }, [channels, ensureEngine]);
-  useEffect(() => { engineRef.current?.syncInserts(inserts); }, [inserts]);
+    };
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, [ensureEngine]);
 
   /* ---- note audition: hear notes as you click/place them, muted while the song plays ---- */
   const auditionOn = useCallback((chId, pitch, vel) => {
@@ -668,13 +683,22 @@ export default function App() {
   return (
     <div onDragStart={(e) => e.preventDefault()} style={{
       width: "100%", height: "100vh", background: BG, color: TEXT, display: "flex", flexDirection: "column",
-      fontFamily: "system-ui, -apple-system, sans-serif", overflow: "hidden", position: "relative", userSelect: "none",
+      fontFamily: FONT_UI, overflow: "hidden", position: "relative", userSelect: "none",
     }}>
       {/* ---------- top bar ---------- */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: PANEL, borderBottom: `1px solid ${LINE}`, flexWrap: "wrap" }}>
-        <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 800, letterSpacing: 2, color: ACCENT, fontSize: 13 }}>✦ {APP_NAME}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 7, flex: "0 0 auto" }}>
+          {/* A drawn mark, not a unicode glyph: a scope screen with a trace across it —
+              the lab half of the name doing the work the star was faking. */}
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: "block" }}>
+            <rect x="1.1" y="2.6" width="13.8" height="10.8" rx="2.4" fill="none" stroke={LINE} strokeWidth="1.2" />
+            <path d="M3.3 8.1h1.4l1.2-3.4 2.1 6.1 1.3-2.7h2.4" fill="none" stroke={ACCENT}
+              strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span style={{ ...TYPE.wordmark, color: TEXT, fontSize: 13 }}>{APP_NAME}</span>
+        </span>
         <input value={title} onChange={(e) => setTitle(e.target.value)} style={{
-          background: PANEL2, border: `1px solid ${LINE}`, borderRadius: 4, color: TEXT,
+          ...TYPE.ui, background: PANEL2, border: `1px solid ${LINE}`, borderRadius: 4, color: TEXT,
           padding: "4px 8px", fontSize: 12, width: 170,
         }} />
         <div style={{ display: "flex", gap: 2 }}>
@@ -688,20 +712,22 @@ export default function App() {
           <Btn onClick={stop} title="Stop · press again to rewind marker to 1:1">■</Btn>
         </div>
         <div style={{
-          fontFamily: "ui-monospace, monospace", background: ROLL.lcdBg, border: `1px solid ${LINE}`, borderRadius: 4,
-          color: ACCENT2, padding: "4px 10px", fontSize: 12, letterSpacing: 1, textShadow: `0 0 8px ${ACCENT2}66`, display: "flex", gap: 12,
+          ...TYPE.lcd, background: ROLL.lcdBg, border: `1px solid ${LINE}`, borderRadius: 4,
+          color: ACCENT2, padding: "4px 10px", fontSize: 12, textShadow: LCD_GLOW, display: "flex", gap: 12,
+          /* recessed glass: the display sits below the panel face, not on it */
+          boxShadow: `inset 0 1px 3px rgba(0,0,0,0.85), inset 0 0 0 1px ${ACCENT2}0f`,
         }}>
           <span>{bpm.toFixed(0)} BPM</span>
           <LCDPosition transportRef={transportRef} beatsPerBar={beatsPerBar} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ fontSize: 10, color: DIM }}>BPM</span>
+          <span style={{ ...TYPE.micro, fontSize: 8, color: DIM }}>BPM</span>
           <input type="number" min={20} max={999} value={bpm}
             onChange={(e) => setBpm(clamp(Number(e.target.value) || 20, 20, 999))}
-            style={{ width: 54, background: PANEL2, border: `1px solid ${LINE}`, borderRadius: 4, color: TEXT, padding: "3px 6px", fontSize: 12 }} />
+            style={{ ...TYPE.data, width: 54, background: PANEL2, border: `1px solid ${LINE}`, borderRadius: 4, color: TEXT, padding: "3px 6px", fontSize: 12 }} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ fontSize: 10, color: DIM }}>Time sig</span>
+          <span style={{ ...TYPE.micro, fontSize: 8, color: DIM }}>Time sig</span>
           <Select value={String(timeSig.num)} width={46}
             options={[2, 3, 4, 5, 6, 7, 9, 12].map((n) => ({ value: String(n), label: String(n) }))}
             onChange={(v) => setTimeSig((t) => ({ ...t, num: Number(v) }))} />
@@ -711,7 +737,7 @@ export default function App() {
             onChange={(v) => setTimeSig((t) => ({ ...t, den: Number(v) }))} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ fontSize: 10, color: DIM }}>Grid</span>
+          <span style={{ ...TYPE.micro, fontSize: 8, color: DIM }}>Grid</span>
           <Select value={String(snap)} width={58}
             options={SNAPS.map((s) => ({ value: String(s.v), label: s.label }))}
             onChange={(v) => setSnap(Number(v))} />
@@ -732,7 +758,7 @@ export default function App() {
         <div style={{ width: 250, borderRight: `1px solid ${LINE}`, display: "flex", flexDirection: "column", background: PANEL, minHeight: 0 }}>
           {/* patterns */}
           <div style={{ padding: "8px 10px", borderBottom: `1px solid ${LINE}`, display: "flex", alignItems: "center" }}>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.2, color: DIM }}>PATTERNS</span>
+            <span style={{ ...TYPE.label, fontSize: 9, color: DIM }}>PATTERNS</span>
             <div style={{ flex: 1 }} />
             <Btn onClick={addPattern} title="New pattern">＋</Btn>
           </div>
@@ -745,9 +771,15 @@ export default function App() {
                 style={{
                   display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", cursor: "pointer",
                   background: p.id === activePatId ? PANEL2 : "transparent",
-                  borderLeft: `3px solid ${p.id === activePatId ? p.color : "transparent"}`,
+                  boxShadow: p.id === activePatId ? `inset 1px 0 0 ${p.color}` : "none",
                 }}>
-                <span style={{ width: 9, height: 9, borderRadius: 2, background: p.color }} />
+                {/* Selection reads as an indicator lamp coming on, not as a coloured
+                    tab glued to the row edge. Unlit chips stay legible, just dark. */}
+                <span style={{
+                  width: 9, height: 9, borderRadius: 2, background: p.color, flex: "0 0 auto",
+                  opacity: p.id === activePatId ? 1 : 0.5,
+                  boxShadow: p.id === activePatId ? `0 0 6px ${p.color}aa` : "none",
+                }} />
                 {renamingPat === p.id ? (
                   <RenameInput initial={p.name} onDone={(v) => {
                     setPatterns((ps) => ps.map((x) => x.id === p.id ? { ...x, name: v || x.name } : x));
@@ -768,25 +800,17 @@ export default function App() {
 
           {/* channel rack */}
           <div style={{ padding: "8px 10px", borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}`, display: "flex", alignItems: "center" }}>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.2, color: DIM }}>CHANNEL RACK</span>
+            <span style={{ ...TYPE.label, fontSize: 9, color: DIM }}>CHANNEL RACK</span>
             <div style={{ flex: 1 }} />
+            {/* instruments are picked per channel below; this input is what that picker opens */}
             <input ref={sfInputRef} type="file" accept=".sf2,.sf3,.dls" style={{ display: "none" }}
               onChange={(e) => { loadSoundfontFile(e.target.files?.[0]); e.target.value = ""; }} />
-            <Select value="" width={92}
-              options={[
-                { value: "", label: sfLoading ? "Loading…" : sfName ? "SF ✓" : "Soundfont…" },
-                ...BUILTIN_SOUNDFONTS.map((f) => ({
-                  value: f.id,
-                  label: `${f.name}${sfCached[f.id] ? " ✓" : ` (${f.approxMB}MB)`}`,
-                })),
-                { value: "__file", label: "Load from file…" },
-              ]}
-              onChange={(v) => {
-                if (!v) return;
-                if (v === "__file") { sfInputRef.current?.click(); return; }
-                const font = BUILTIN_SOUNDFONTS.find((f) => f.id === v);
-                if (font) loadBuiltinSoundfont(font);
-              }} />
+            {(sfLoading || sfName) && (
+              <span title={sfName ? `Soundfont loaded: ${sfName}` : undefined} style={{
+                fontSize: 8, color: sfLoading ? DIM : ACCENT2, marginRight: 6, maxWidth: 96,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>{sfLoading ? "loading…" : `♪ ${sfName}`}</span>
+            )}
             <Btn onClick={addChannel} title="Add channel">＋</Btn>
           </div>
           <div style={{ flex: 1, overflowY: "auto" }}>
@@ -794,7 +818,7 @@ export default function App() {
               <div key={c.id} onClick={() => setActiveChId(c.id)} style={{
                 padding: "8px 10px", cursor: "pointer", borderBottom: `1px solid ${LINE}22`,
                 background: c.id === activeChId ? PANEL2 : "transparent",
-                borderLeft: `3px solid ${c.id === activeChId ? ACCENT : "transparent"}`,
+                boxShadow: c.id === activeChId ? `inset 1px 0 0 ${ACCENT}` : "none",
               }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   {renamingCh === c.id ? (
@@ -803,7 +827,7 @@ export default function App() {
                       setRenamingCh(null);
                     }} />
                   ) : (
-                    <span style={{ fontSize: 11, fontWeight: 600, flex: 1 }}
+                    <span style={{ ...TYPE.ui, fontWeight: 600, fontSize: 11, flex: 1, color: c.id === activeChId ? ACCENT : TEXT }}
                       onDoubleClick={(e) => { e.stopPropagation(); setRenamingCh(c.id); }}>{c.name}</span>
                   )}
                   <button onClick={(e) => { e.stopPropagation(); setChanSettingsId(c.id); }}
@@ -820,7 +844,7 @@ export default function App() {
                     onChange={(v) => setChannels((cs) => cs.map((x) => x.id === c.id ? { ...x, vol: v } : x))} />
                 </div>
                 <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                  <span style={{ fontSize: 8, color: DIM, letterSpacing: 0.5 }} title="Mixer insert this channel routes to">FX</span>
+                  <span style={{ ...TYPE.micro, fontSize: 8, color: DIM }} title="Mixer insert this channel routes to">FX</span>
                   <Select value={String(c.insert ?? 0)} width={64}
                     options={[{ value: "0", label: "Master" }, ...[1, 2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: `Ins ${n}` }))]}
                     onChange={(v) => setChannels((cs) => cs.map((x) => x.id === c.id ? { ...x, insert: Number(v) } : x))} />
@@ -914,7 +938,7 @@ export default function App() {
                 {Array.from({ length: SONG_BARS }, (_, i) => (
                   <div key={i} style={{
                     width: PL_BAR_W, flexShrink: 0, fontSize: 9, color: DIM, borderLeft: `1px solid ${LINE}`,
-                    paddingLeft: 4, paddingTop: 5, fontFamily: "ui-monospace, monospace", pointerEvents: "none",
+                    paddingLeft: 4, paddingTop: 5, ...TYPE.data, pointerEvents: "none",
                     backgroundImage: `repeating-linear-gradient(to right, ${LINE}66 0 1px, transparent 1px ${beatPx}px)`,
                     backgroundPosition: "bottom", backgroundSize: `100% 6px`, backgroundRepeat: "no-repeat",
                   }}>{i + 1}</div>
@@ -936,7 +960,7 @@ export default function App() {
                       height: 40, borderBottom: `1px solid ${LINE}55`, position: "relative",
                       background: t % 2 ? ROLL.trackA : ROLL.trackB,
                       backgroundImage: `
-                        repeating-linear-gradient(to right, rgba(255,255,255,0.028) 0 ${PL_BAR_W * 4}px, transparent ${PL_BAR_W * 4}px ${PL_BAR_W * 8}px),
+                        repeating-linear-gradient(to right, rgba(255,238,212,0.03) 0 ${PL_BAR_W * 4}px, transparent ${PL_BAR_W * 4}px ${PL_BAR_W * 8}px),
                         repeating-linear-gradient(to right, ${LINE}99 0 1px, transparent 1px ${PL_BAR_W}px),
                         repeating-linear-gradient(to right, ${LINE}40 0 1px, transparent 1px ${beatPx}px)${snap < 1 ? `,
                         repeating-linear-gradient(to right, ${LINE}20 0 1px, transparent 1px ${beatPx * snap}px)` : ""}
@@ -1005,7 +1029,7 @@ export default function App() {
               borderTop: `2px solid ${selInsert === i ? ACCENT : "transparent"}`,
               display: "flex", flexDirection: "column", gap: 6,
             }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: i === 0 ? ACCENT : TEXT, textAlign: "center" }}>{ins.name}</div>
+              <div style={{ ...TYPE.label, fontSize: 9, color: i === 0 ? ACCENT : TEXT, textAlign: "center" }}>{ins.name}</div>
               <div title={routed.map((c) => c.name).join(", ") || "No channels routed here"} style={{
                 fontSize: 8, color: hasActive ? ACCENT2 : DIM, textAlign: "center", minHeight: 10,
                 overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
@@ -1015,7 +1039,7 @@ export default function App() {
               <input type="range" min={0} max={1} step={0.01} value={ins.vol}
                 onChange={(e) => setInserts((xs) => xs.map((x, j) => j === i ? { ...x, vol: Number(e.target.value) } : x))}
                 style={{ width: "100%", accentColor: ACCENT }} />
-              <div style={{ fontSize: 8, color: DIM, textAlign: "center", fontFamily: "ui-monospace, monospace" }}>{Math.round(ins.vol * 100)}%</div>
+              <div style={{ ...TYPE.data, fontSize: 8, color: DIM, textAlign: "center" }}>{Math.round(ins.vol * 100)}%</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
                 {ins.slots.map((s, j) => (
                   <div key={j}
@@ -1076,7 +1100,7 @@ export default function App() {
               return (
                 <div style={{ borderBottom: `1px solid ${LINE}`, padding: "10px 12px", background: BG }}>
                   <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
-                    <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 2, color: ACCENT }}>3x OSC</span>
+                    <span style={{ ...TYPE.label, textTransform: "none", fontSize: 11, color: ACCENT }}>3x OSC</span>
                     <div style={{ flex: 1 }} />
                     <Btn on={!!inst.osc3AM} onClick={() => setInst({ osc3AM: !inst.osc3AM })}
                       title="Oscillator 2 amplitude-modulates oscillator 3 (classic FL switch)"
@@ -1085,7 +1109,7 @@ export default function App() {
                   {inst.oscs.map((o, i) => (
                     <div key={i} style={{ background: PANEL2, borderRadius: 6, padding: "7px 9px", marginBottom: 6, border: `1px solid ${LINE}` }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
-                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, color: i === 2 && inst.osc3AM ? ACCENT : DIM, width: 38 }}>
+                        <span style={{ ...TYPE.micro, fontSize: 9, color: i === 2 && inst.osc3AM ? ACCENT : DIM, width: 38 }}>
                           OSC {i + 1}
                         </span>
                         {WAVEFORMS.map((w) => (
@@ -1117,7 +1141,7 @@ export default function App() {
                     </div>
                   ))}
                   <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", marginTop: 8 }}>
-                    <span style={{ fontSize: 8, color: DIM, letterSpacing: 1, fontWeight: 700 }}>AMP<br />ENV</span>
+                    <span style={{ ...TYPE.micro, fontSize: 8, color: DIM, lineHeight: 1.25 }}>AMP<br />ENV</span>
                     <Knob label="ATT" size={30} value={inst.attack} min={0} max={1} parse={(s) => numFrom(s) / 100}
                       fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setInst({ attack: v })} />
                     <Knob label="DEC" size={30} value={inst.decay} min={0} max={1} parse={(s) => numFrom(s) / 100}
@@ -1137,18 +1161,24 @@ export default function App() {
               <Knob label="PITCH" size={44} value={ch.pitch ?? 0} min={-24} max={24}
                 parse={(s) => numFrom(s) / 100}
                 fmt={(v) => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}ct`} onChange={(v) => patch("pitch", v)} />
-              <Knob label="ATTACK" value={ch.attack ?? 0.5} min={0} max={1} parse={(s) => numFrom(s) / 100}
-                fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch("attack", v)} />
-              <Knob label="DECAY" value={ch.decay ?? 0.5} min={0} max={1} parse={(s) => numFrom(s) / 100}
-                fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch("decay", v)} />
-              <Knob label="SUSTAIN" value={ch.sustain ?? 0.5} min={0} max={1} parse={(s) => numFrom(s) / 100}
-                fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch("sustain", v)} />
-              <Knob label="RELEASE" value={ch.release ?? 0.5} min={0} max={1} parse={(s) => numFrom(s) / 100}
-                fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch("release", v)} />
+              {/* the ADSR knobs are MIDI sound-controller offsets — soundfont channels only.
+                  3xOsc has its own real envelope above, so showing them here would be dead controls. */}
+              {ch.instrument?.type !== "3xosc" && (
+                <>
+                  <Knob label="ATTACK" value={ch.attack ?? 0.5} min={0} max={1} parse={(s) => numFrom(s) / 100}
+                    fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch("attack", v)} />
+                  <Knob label="DECAY" value={ch.decay ?? 0.5} min={0} max={1} parse={(s) => numFrom(s) / 100}
+                    fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch("decay", v)} />
+                  <Knob label="SUSTAIN" value={ch.sustain ?? 0.5} min={0} max={1} parse={(s) => numFrom(s) / 100}
+                    fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch("sustain", v)} />
+                  <Knob label="RELEASE" value={ch.release ?? 0.5} min={0} max={1} parse={(s) => numFrom(s) / 100}
+                    fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch("release", v)} />
+                </>
+              )}
             </div>
             <div style={{ fontSize: 9, color: DIM, padding: "0 16px 12px", textAlign: "center" }}>
               {ch.instrument?.type === "3xosc"
-                ? "3xOsc uses its own ADSR above — these shape pitch and MIDI envelope offsets"
+                ? "Channel pitch tunes the whole 3xOsc — its envelope lives in AMP ENV above"
                 : "50% = soundfont default · sustain is stored but not yet audible (engine limitation)"}
             </div>
           </FloatWin>
@@ -1230,14 +1260,14 @@ export default function App() {
         const count = notesOnChannel(ch.id);
         return (
           <div onClick={() => setConfirmDelCh(null)} style={{
-            position: "absolute", inset: 0, background: "rgba(8,10,20,0.6)", zIndex: 500,
+            position: "absolute", inset: 0, background: "rgba(10,9,7,0.66)", zIndex: 500,
             display: "flex", alignItems: "center", justifyContent: "center",
           }}>
             <div onClick={(e) => e.stopPropagation()} style={{
               width: 320, background: PANEL, border: `1px solid ${DANGER}`, borderRadius: 8,
               padding: 16, boxShadow: "0 16px 48px rgba(0,0,0,0.6)",
             }}>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Delete {ch.name}?</div>
+              <div style={{ ...TYPE.uiStrong, fontSize: 12, marginBottom: 8 }}>Delete {ch.name}?</div>
               <div style={{ fontSize: 11, color: DIM, lineHeight: 1.5, marginBottom: 14 }}>
                 {count > 0
                   ? <>This removes the channel and <span style={{ color: DANGER, fontWeight: 700 }}>{count} note{count === 1 ? "" : "s"}</span> written on it across your patterns. This can't be undone.</>
@@ -1271,7 +1301,7 @@ export default function App() {
             }} />
           </div>
           {sfProgress.total > 0 && (
-            <div style={{ fontSize: 9, color: DIM, marginTop: 4, fontFamily: "ui-monospace, monospace" }}>
+            <div style={{ ...TYPE.data, fontSize: 9, color: DIM, marginTop: 4 }}>
               {(sfProgress.loaded / 1048576).toFixed(0)} / {(sfProgress.total / 1048576).toFixed(0)} MB
             </div>
           )}

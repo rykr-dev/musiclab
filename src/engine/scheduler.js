@@ -8,6 +8,11 @@
 const TICK_MS = 25;
 const LOOKAHEAD_S = 0.18;
 
+/* Untrimmed clips (lenBars == null) follow their pattern's content, rounded up
+   to whole measures — same rule the playlist uses to draw them. */
+export const patternLenBars = (pattern, bpb) => Math.max(1, Math.ceil(
+  pattern.notes.reduce((m, n) => Math.max(m, n.start + n.len), 0) / bpb || 1));
+
 export class Scheduler {
   constructor(ctx, voice, getState) {
     this.ctx = ctx;
@@ -125,7 +130,7 @@ export class Scheduler {
       if (!pattern) continue;
       const clipStart = clip.startBar * bpb;                       // song beats
       const w0 = (clip.offsetBars ?? 0) * bpb;                     // pattern-window start (pattern beats)
-      const wEnd = w0 + (clip.lenBars ?? 1) * bpb;                 // pattern-window end
+      const wEnd = w0 + (clip.lenBars ?? patternLenBars(pattern, bpb)) * bpb;  // pattern-window end
 
       for (const n of pattern.notes) {
         if (n.start < w0 || n.start >= wEnd) continue;             // must START inside the trim window

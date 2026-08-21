@@ -1,10 +1,10 @@
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; padding: 0; height: 100%; }
-body { background: #111320; overflow: hidden; }
+body { background: #131418; overflow: hidden; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #14162a; }
-::-webkit-scrollbar-thumb { background: #2e3349; border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #3a4059; }
+::-webkit-scrollbar-track { background: #17181c; }
+::-webkit-scrollbar-thumb { background: #34383f; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #454a52; }
 html, body { overscroll-behavior: none; }
 
 

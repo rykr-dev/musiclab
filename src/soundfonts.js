@@ -82,18 +82,34 @@ export async function clearCached(id) {
   } catch { /* nothing cached */ }
 }
 
+/* ---------- validation ----------
+   The SPA fallback answers ANY missing path with index.html + HTTP 200, so a
+   soundfont that isn't hosted "downloads" fine and then fails to parse. Real
+   .sf2/.sf3/.dls files are RIFF containers — check the magic before trusting
+   (or caching) anything. */
+export function looksLikeSoundfont(buf) {
+  if (!buf || buf.byteLength < 12) return false;
+  const b = new Uint8Array(buf, 0, 4);
+  return b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46; // "RIFF"
+}
+
 /* ---------- fetch with progress ---------- */
 export async function fetchSoundfont(font, onProgress) {
   const cached = await getCached(font.id);
-  if (cached) { onProgress?.({ done: true, cached: true }); return cached; }
+  if (cached && looksLikeSoundfont(cached)) { onProgress?.({ done: true, cached: true }); return cached; }
+  if (cached) await clearCached(font.id);          // a bad payload got cached earlier — purge it
 
   const res = await fetch(font.url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if ((res.headers.get("content-type") || "").includes("text/html")) {
+    throw new Error("not hosted at this URL (got a web page instead of a soundfont)");
+  }
 
   const total = Number(res.headers.get("content-length")) || font.approxMB * 1024 * 1024;
   const reader = res.body?.getReader();
   if (!reader) {                                   // no streaming: fall back to a plain read
     const buf = await res.arrayBuffer();
+    if (!looksLikeSoundfont(buf)) throw new Error("not hosted at this URL (got a web page instead of a soundfont)");
     await putCached(font.id, buf);
     return buf;
   }
@@ -111,6 +127,9 @@ export async function fetchSoundfont(font, onProgress) {
   const buf = new Uint8Array(loaded);
   let off = 0;
   for (const c of chunks) { buf.set(c, off); off += c.length; }
+  if (!looksLikeSoundfont(buf.buffer)) {
+    throw new Error("not hosted at this URL (got a web page instead of a soundfont)");
+  }
   onProgress?.({ done: true, caching: true });
   await putCached(font.id, buf.buffer);
   return buf.buffer;

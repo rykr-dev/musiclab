@@ -1,23 +1,39 @@
-/* ================= design tokens ================= */
-const BG = "#111320";
-const PANEL = "#1a1d2b";
-const PANEL2 = "#232738";
-const RAISED = "#2b3045";
-const LINE = "#2e3349";
-const TEXT = "#ccd2e8";
-const DIM = "#7d84a6";
-const ACCENT = "#f7a838";   // amber — active states
-const ACCENT2 = "#6ee7ff";  // cyan — LCD / playhead
-const DANGER = "#ff6e8a";
+/* ================= design tokens =================
+   Neutral graphite chrome (no blue cast) + FL-style warm orange accent,
+   mint green for the LCD / playheads. */
+const BG = "#131418";
+const PANEL = "#1b1d22";
+const PANEL2 = "#25282e";
+const RAISED = "#30343b";
+const LINE = "#34383f";
+const TEXT = "#d9dbe0";
+const DIM = "#8a8f99";
+const ACCENT = "#ff9838";   // FL orange — active states
+const ACCENT2 = "#5ee6a8";  // mint — LCD / playhead
+const DANGER = "#ff6473";
 
-const PATTERN_COLORS = ["#f7a838", "#6ee7ff", "#b48bff", "#7dff9e", "#ff7d9e", "#ffd76e", "#6effd9", "#9eb1ff"];
+const PATTERN_COLORS = ["#ff9838", "#5ee6a8", "#66c7ff", "#c792ff", "#ff7d9e", "#ffd76e", "#6effd9", "#9eb1ff"];
 
 /* FL-style note color presets (pattern paint colors) */
 const NOTE_COLORS = [
-  "#f7a838", "#6ee7ff", "#7dff9e", "#ff7d9e",
-  "#b48bff", "#ffd76e", "#6effd9", "#ff9c6e",
+  "#ff9838", "#5ee6a8", "#66c7ff", "#ff7d9e",
+  "#c792ff", "#ffd76e", "#6effd9", "#ff8f6e",
   "#9eb1ff", "#ff6ee7", "#a8f76e", "#e8edf7",
 ];
+
+/* piano-roll / playlist surface colors (canvas-drawn, so they live here) */
+const ROLL = {
+  bg: "#141519",
+  rowBlack: "#17181d", rowWhite: "#1d2025",
+  octaveLine: "#3a3e46",
+  barLine: "#4b505a", beatLine: "#2e323a", subLine: "#22252c",
+  hoverRow: "rgba(255,152,56,0.07)",
+  ghost: "rgba(150,156,168,0.22)",
+  keyWhite: "#e6e4dd", keyBlack: "#26282e", keyTextWhite: "#3a3d46",
+  velBg: "#101114", velBar: "#323841", velBeat: "#1e2127",
+  trackA: "#191b1f", trackB: "#1c1e23",
+  lcdBg: "#0e0f12",
+};
 
 /* ================= music constants ================= */
 const MIN_PITCH = 24, MAX_PITCH = 96;             // C1 .. C7
@@ -62,7 +78,7 @@ export function bumpUid(n) { if (n > _id) _id = n; }
 
 export {
   BG, PANEL, PANEL2, RAISED, LINE, TEXT, DIM, ACCENT, ACCENT2, DANGER,
-  PATTERN_COLORS, NOTE_COLORS,
+  PATTERN_COLORS, NOTE_COLORS, ROLL,
   MIN_PITCH, MAX_PITCH, ROWS, ROW_H, KEYS_W, BEAT_W, PR_BARS, VEL_H,
   PL_BAR_W, SONG_BARS, N_TRACKS, NOTE_NAMES, isBlack, pitchName,
   IS_MAC, ALT_LABEL, CMD_LABEL, DEFAULT_VEL, SNAPS, uid, clamp, defaultReverb,

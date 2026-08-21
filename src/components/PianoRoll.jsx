@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import {
-  PANEL, PANEL2, LINE, TEXT, DIM, ACCENT, ACCENT2, NOTE_COLORS,
+  PANEL, PANEL2, LINE, TEXT, DIM, ACCENT, ACCENT2, NOTE_COLORS, ROLL,
   MIN_PITCH, MAX_PITCH, ROWS, ROW_H, KEYS_W, BEAT_W, PR_BARS, VEL_H,
   isBlack, pitchName, ALT_LABEL, CMD_LABEL, DEFAULT_VEL, SNAPS, uid, clamp, DANGER,
 } from "../constants";
@@ -9,7 +9,7 @@ import { Knob, Btn, Select, numFrom, parsePan } from "./ui";
 let noteClipboard = [];   // survives roll close; pastes across patterns
 
 /* ================= piano roll ================= */
-function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, beatsPerBar, clips, transportRef, size, setSize, audition, auditionOff, patStartBeats, scrubPattern, patLoopBeats }) {
+function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, beatsPerBar, clips, transportRef, size, setSize, audition, auditionOff, markerBeats, scrubRuler, patLoopBeats, mode }) {
   const canvasRef = useRef(null);
   const velRef = useRef(null);
   const scrollRef = useRef(null);
@@ -51,13 +51,21 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
   const bars = Math.max(PR_BARS + extraBars, neededBars);
   const totalBeats = bars * beatsPerBar;
   const W = KEYS_W + totalBeats * beatW;
+  const growPending = useRef(false);
+  useEffect(() => { growPending.current = false; }, [bars]);
   const growIfNearEdge = (el) => {
-    if (!el) return;
-    if (el.scrollLeft + el.clientWidth > W - 260) setExtraBars((b) => b + 4);
+    if (!el || growPending.current) return;
+    // scroll events can arrive several times before React re-renders the wider
+    // canvas — without the pending flag each one would add 4 more bars
+    if (el.scrollLeft + el.clientWidth > W - 300) {
+      growPending.current = true;
+      setExtraBars((b) => b + 4);
+    }
   };
   const growRef = useRef(growIfNearEdge);
   growRef.current = growIfNearEdge;
   const H = ROWS * ROW_H;
+  const patBars = Math.max(1, Math.ceil(contentEnd / beatsPerBar || 1));   // content length, whole measures
   const snapV = snap;
   if (lastLen.current == null) lastLen.current = snapV;
 
@@ -77,10 +85,10 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
 
     for (let r = 0; r < ROWS; r++) {
       const pitch = MAX_PITCH - r;
-      ctx.fillStyle = isBlack(pitch) ? "#151827" : "#1b1f30";
+      ctx.fillStyle = isBlack(pitch) ? ROLL.rowBlack : ROLL.rowWhite;
       ctx.fillRect(KEYS_W, r * ROW_H, W - KEYS_W, ROW_H);
       if (pitch % 12 === 0) {
-        ctx.fillStyle = "#3a4059";
+        ctx.fillStyle = ROLL.octaveLine;
         ctx.fillRect(KEYS_W, r * ROW_H + ROW_H - 1, W - KEYS_W, 1);
       }
     }
@@ -90,18 +98,18 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
       const beat = x * snapV;
       const isBar = Math.abs(beat % beatsPerBar) < 1e-6;
       const isBeat = Math.abs(beat % 1) < 1e-6;
-      ctx.fillStyle = isBar ? "#454c6b" : isBeat ? "#2c3149" : "#20243a";
+      ctx.fillStyle = isBar ? ROLL.barLine : isBeat ? ROLL.beatLine : ROLL.subLine;
       ctx.fillRect(Math.round(px), 0, 1, H);
     }
     // hovered row highlight
     if (hoverPitch != null) {
-      ctx.fillStyle = "rgba(247,168,56,0.07)";
+      ctx.fillStyle = ROLL.hoverRow;
       ctx.fillRect(KEYS_W, (MAX_PITCH - hoverPitch) * ROW_H, W - KEYS_W, ROW_H);
     }
     // ghost notes (other channels)
     for (const n of pattern.notes) {
       if (n.ch === activeCh.id) continue;
-      ctx.fillStyle = "rgba(140,148,185,0.22)";
+      ctx.fillStyle = ROLL.ghost;
       ctx.fillRect(KEYS_W + n.start * beatW, (MAX_PITCH - n.pitch) * ROW_H + 1, n.len * beatW - 1, ROW_H - 2);
     }
     // active channel notes — brightness follows velocity, fill follows note color
@@ -143,10 +151,10 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
     for (let r = 0; r < ROWS; r++) {
       const pitch = MAX_PITCH - r;
       const hovered = pitch === hoverPitch;
-      ctx.fillStyle = hovered ? ACCENT : isBlack(pitch) ? "#20233a" : "#d7dbee";
+      ctx.fillStyle = hovered ? ACCENT : isBlack(pitch) ? ROLL.keyBlack : ROLL.keyWhite;
       ctx.fillRect(0, r * ROW_H, KEYS_W, ROW_H - 1);
       if (pitch % 12 === 0 || hovered) {
-        ctx.fillStyle = hovered ? "#1a1200" : isBlack(pitch) ? TEXT : "#333a55";
+        ctx.fillStyle = hovered ? "#1a1200" : isBlack(pitch) ? TEXT : ROLL.keyTextWhite;
         ctx.font = hovered ? "bold 9px ui-monospace, monospace" : "9px ui-monospace, monospace";
         ctx.fillText(pitchName(pitch), 6, r * ROW_H + 10);
       }
@@ -164,14 +172,14 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
     cv.width = Math.floor(W * dpr); cv.height = Math.floor(VEL_H * dpr);
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, VEL_H);
-    ctx.fillStyle = "#12152a";
+    ctx.fillStyle = ROLL.velBg;
     ctx.fillRect(0, 0, W, VEL_H);
     const snapPx = snapV * beatW;
     for (let x = 0; x <= totalBeats / snapV; x++) {
       const px = KEYS_W + x * snapPx;
       const beat = x * snapV;
       const isBar = Math.abs(beat % beatsPerBar) < 1e-6;
-      ctx.fillStyle = isBar ? "#353c5a" : "#1c2038";
+      ctx.fillStyle = isBar ? ROLL.velBar : ROLL.velBeat;
       ctx.fillRect(Math.round(px), 0, 1, VEL_H);
     }
     const notes = pattern.notes.filter((n) => n.ch === activeCh.id).sort((a, b) => a.start - b.start);
@@ -358,10 +366,10 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
   const lastPointer = useRef(null);
   const rulerDrag = useRef(false);
   const rollScrub = (e) => {
-    if (!scrubPattern) return;
+    if (!scrubRuler) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const raw = (e.clientX - rect.left - KEYS_W) / beatW;
-    scrubPattern(Math.max(0, e.altKey ? raw : Math.round(raw / snapV) * snapV));
+    scrubRuler(Math.max(0, e.altKey ? raw : Math.round(raw / snapV) * snapV));
   };
   const scrollRAF = useRef(null);
   const stopAutoScroll = () => {
@@ -570,7 +578,7 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
           if (velScrollRef.current) velScrollRef.current.scrollLeft = e.target.scrollLeft;
           growIfNearEdge(e.target);
         }}
-        style={{ width: size.w, height: size.h, overflow: "auto", background: "#141728" }}>
+        style={{ width: size.w, height: size.h, overflow: "auto", background: ROLL.bg }}>
         {/* ruler — click or drag to set the pattern marker (switches transport to PAT mode) */}
         <div className="dragsurface"
           onPointerDown={(e) => {
@@ -582,29 +590,38 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
           }}
           onPointerMove={(e) => { if (rulerDrag.current) rollScrub(e); }}
           onPointerUp={() => { rulerDrag.current = false; }}
-          title="Click or drag to play the pattern from here"
+          title={mode === "song"
+            ? "Click or drag to move the SONG marker to this spot of the pattern"
+            : "Click or drag to play the pattern from here"}
           style={{
-            position: "sticky", top: 0, zIndex: 6, width: W, height: 18, cursor: "pointer",
+            position: "sticky", top: 0, zIndex: 6, width: W, height: 22, cursor: "pointer",
             background: PANEL, borderBottom: `1px solid ${LINE}`,
           }}>
+          <div style={{
+            position: "sticky", left: 0, zIndex: 2, width: KEYS_W, height: 22, background: PANEL2,
+            borderRight: `1px solid ${LINE}`, fontSize: 8, color: ACCENT, fontWeight: 700,
+            letterSpacing: 0.6, paddingLeft: 6, paddingTop: 6, pointerEvents: "none",
+          }}>{mode === "song" ? "SONG ▸" : "PAT ▸"}</div>
           {Array.from({ length: bars }, (_, i) => (
             <div key={i} style={{
               position: "absolute", left: KEYS_W + i * beatsPerBar * beatW, top: 0,
-              width: beatsPerBar * beatW, height: 18, borderLeft: `1px solid ${LINE}`,
-              fontSize: 9, color: DIM, paddingLeft: 4, paddingTop: 3,
+              width: beatsPerBar * beatW, height: 22, borderLeft: `1px solid ${LINE}`,
+              fontSize: 9, color: DIM, paddingLeft: 4, paddingTop: 5,
               fontFamily: "ui-monospace, monospace", pointerEvents: "none", boxSizing: "border-box",
               backgroundImage: `repeating-linear-gradient(to right, ${LINE}55 0 1px, transparent 1px ${beatW}px)`,
               backgroundPosition: "bottom", backgroundSize: "100% 5px", backgroundRepeat: "no-repeat",
             }}>{i + 1}</div>
           ))}
-          <div style={{
-            position: "absolute", left: KEYS_W + (patStartBeats ?? 0) * beatW - 5, top: 0,
-            width: 0, height: 0, borderLeft: "5px solid transparent", borderRight: "5px solid transparent",
-            borderTop: `8px solid ${ACCENT}`, pointerEvents: "none",
-          }} />
+          {markerBeats != null && (
+            <div style={{
+              position: "absolute", left: KEYS_W + markerBeats * beatW - 5, top: 0,
+              width: 0, height: 0, borderLeft: "6px solid transparent", borderRight: "6px solid transparent",
+              borderTop: `10px solid ${ACCENT}`, pointerEvents: "none", zIndex: 3,
+            }} />
+          )}
           {patLoopBeats != null && (
             <div style={{
-              position: "absolute", left: KEYS_W + patLoopBeats * beatW - 1, top: 0, width: 2, height: 18,
+              position: "absolute", left: KEYS_W + patLoopBeats * beatW - 1, top: 0, width: 2, height: 22,
               background: DANGER, opacity: 0.7, pointerEvents: "none",
             }} title="pattern loop end" />
           )}
@@ -616,7 +633,7 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
             onPointerLeave={() => setHoverPitch(null)}
             onDoubleClick={onDoubleClick}
             onContextMenu={(e) => e.preventDefault()} />
-          <RollPlayhead transportRef={transportRef} clips={clips} patternId={pattern.id} beatsPerBar={beatsPerBar} beatW={beatW} height={H} />
+          <RollPlayhead transportRef={transportRef} clips={clips} patternId={pattern.id} beatsPerBar={beatsPerBar} beatW={beatW} height={H} patternLenBars={patBars} />
         </div>
       </div>
       <div ref={velScrollRef} style={{ width: size.w, height: VEL_H, overflow: "hidden", borderTop: `1px solid ${LINE}` }}>
@@ -633,7 +650,7 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
             onPointerMove={(e) => { if (velDrag.current) velApply(e); }}
             onPointerUp={() => { velDrag.current = false; setVelInfo(null); }}
             onContextMenu={(e) => e.preventDefault()} />
-          <RollPlayhead transportRef={transportRef} clips={clips} patternId={pattern.id} beatsPerBar={beatsPerBar} beatW={beatW} height={VEL_H} />
+          <RollPlayhead transportRef={transportRef} clips={clips} patternId={pattern.id} beatsPerBar={beatsPerBar} beatW={beatW} height={VEL_H} patternLenBars={patBars} />
           {velInfo && (
             <div style={{
               position: "absolute", left: clamp(velInfo.x + 8, KEYS_W, W - 46), top: 3,
@@ -707,17 +724,18 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
 }
 
 /* ================= piano roll playhead ================= */
-function RollPlayhead({ transportRef, clips, patternId, beatsPerBar, beatW, height }) {
+function RollPlayhead({ transportRef, clips, patternId, beatsPerBar, beatW, height, patternLenBars = 1 }) {
   const [x, setX] = useState(null);
   useEffect(() => {
     let raf;
     const tick = () => {
       const t = transportRef.current;
+      const base = t.mode === "pattern" ? (t.patStart ?? 0) : (t.startBeats ?? 0);
       const songBeats = t.getBeats
         ? t.getBeats()
         : t.playing
-          ? (t.startBeats ?? 0) + ((performance.now() - t.t0) * t.bpm) / 60000
-          : (t.startBeats ?? 0);                       // stopped → show the start marker position
+          ? base + ((performance.now() - t.t0) * t.bpm) / 60000
+          : base;                                      // stopped → show the marker position
       if (t.mode === "pattern") {                     // PAT mode: straight pattern time, looped
         const loop = Math.max(1e-6, t.patLoopBeats || beatsPerBar);
         const pb = t.playing ? songBeats % loop : (t.patStart ?? 0);
@@ -729,7 +747,7 @@ function RollPlayhead({ transportRef, clips, patternId, beatsPerBar, beatW, heig
       let px = null;
       for (const c of clips) {                         // find a clip of this pattern under the playhead
         if (c.patternId !== patternId) continue;
-        const len = c.lenBars ?? 1;
+        const len = c.lenBars ?? patternLenBars;       // untrimmed clips follow the pattern's length
         if (songBars >= c.startBar && songBars < c.startBar + len) {
           const patBars = songBars - c.startBar + (c.offsetBars ?? 0);   // clip trim offset shifts roll time
           px = KEYS_W + patBars * beatsPerBar * beatW;
@@ -741,7 +759,7 @@ function RollPlayhead({ transportRef, clips, patternId, beatsPerBar, beatW, heig
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [transportRef, clips, patternId, beatsPerBar, beatW]);
+  }, [transportRef, clips, patternId, beatsPerBar, beatW, patternLenBars]);
   if (x == null) return null;
   return <div style={{
     position: "absolute", left: x, top: 0, height, width: 1,

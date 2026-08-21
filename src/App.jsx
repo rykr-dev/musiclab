@@ -1,14 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   BG, PANEL, PANEL2, LINE, TEXT, DIM, ACCENT, ACCENT2, DANGER,
-  PATTERN_COLORS, PL_BAR_W, SONG_BARS, N_TRACKS, ALT_LABEL,
+  PATTERN_COLORS, PL_BAR_W, SONG_BARS, N_TRACKS, ALT_LABEL, ROLL,
   uid, clamp, defaultReverb, bumpUid, DEFAULT_VEL, APP_NAME, SNAPS, CMD_LABEL,
 } from "./constants";
 import { Knob, Btn, Select, RenameInput, FloatWin, numFrom, parsePan } from "./components/ui";
 import PianoRoll from "./components/PianoRoll";
 import { Engine } from "./engine/engine";
 import { listSaves, saveLocal, loadLocal, deleteLocal, encodeShare, decodeShare } from "./store";
-import { BUILTIN_SOUNDFONTS, fetchSoundfont, getCached, clearCached } from "./soundfonts";
+import { BUILTIN_SOUNDFONTS, fetchSoundfont, getCached, clearCached, looksLikeSoundfont } from "./soundfonts";
 import { defaultThreeOsc, WAVEFORMS } from "./engine/threeosc";
 
 /* ================= playlist playhead ================= */
@@ -18,11 +18,12 @@ function Playhead({ transportRef, beatsPerBar }) {
     let raf;
     const tick = () => {
       const t = transportRef.current;
+      const base = t.mode === "pattern" ? (t.patStart ?? 0) : (t.startBeats ?? 0);
       setBeats(t.getBeats
         ? t.getBeats()
         : t.playing
-          ? (t.startBeats ?? 0) + ((performance.now() - t.t0) * t.bpm) / 60000
-          : (t.startBeats ?? 0));
+          ? base + ((performance.now() - t.t0) * t.bpm) / 60000
+          : base);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -39,11 +40,12 @@ function LCDPosition({ transportRef, beatsPerBar }) {
     let raf;
     const tick = () => {
       const t = transportRef.current;
+      const base = t.mode === "pattern" ? (t.patStart ?? 0) : (t.startBeats ?? 0);
       setBeats(t.getBeats
         ? t.getBeats()
         : t.playing
-          ? (t.startBeats ?? 0) + ((performance.now() - t.t0) * t.bpm) / 60000
-          : (t.startBeats ?? 0));
+          ? base + ((performance.now() - t.t0) * t.bpm) / 60000
+          : base);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -105,8 +107,8 @@ export default function App() {
   }, []);
 
   const [channels, setChannels] = useState([
-    { id: 1, name: "Channel 1", vol: 0.8, pan: 0, insert: 0, instrument: null, pitch: 0, attack: 0.5, decay: 0.5, sustain: 0.5, release: 0.5 },
-    { id: 2, name: "Channel 2", vol: 0.8, pan: 0, insert: 0, instrument: null, pitch: 0, attack: 0.5, decay: 0.5, sustain: 0.5, release: 0.5 },
+    { id: 1, name: "Channel 1", vol: 0.8, pan: 0, insert: 0, instrument: defaultThreeOsc(), pitch: 0, attack: 0.5, decay: 0.5, sustain: 0.5, release: 0.5 },
+    { id: 2, name: "Channel 2", vol: 0.8, pan: 0, insert: 0, instrument: defaultThreeOsc(), pitch: 0, attack: 0.5, decay: 0.5, sustain: 0.5, release: 0.5 },
   ]);
   const [activeChId, setActiveChId] = useState(1);
   const [renamingCh, setRenamingCh] = useState(null);
@@ -158,14 +160,29 @@ export default function App() {
     return engineRef.current;
   }, [toast]);
 
+  /* a channel that asked for a soundfont from its instrument picker gets the
+     first preset assigned automatically once the font arrives */
+  const assignSfChRef = useRef(null);
+  const assignPendingChannel = () => {
+    const chId = assignSfChRef.current;
+    assignSfChRef.current = null;
+    if (chId == null) return;
+    const p = engineRef.current?.presets?.[0];
+    if (!p) return;
+    setChannels((cs) => cs.map((x) => x.id === chId
+      ? { ...x, instrument: { bank: p.bank, program: p.program, name: p.name } } : x));
+  };
+
   const loadSoundfontFile = async (file) => {
     if (!file) return;
     try {
       setSfLoading(true);
       const eng = await ensureEngine();
       const buf = await file.arrayBuffer();
+      if (!looksLikeSoundfont(buf)) throw new Error("that file isn't a soundfont (.sf2/.sf3/.dls)");
       await eng.loadSoundfont(buf);
       setSfName(file.name);
+      assignPendingChannel();
     } catch (err) {
       console.error(err);
       toast(`Couldn't load soundfont: ${err.message || err}`);
@@ -175,6 +192,7 @@ export default function App() {
   };
 
   const loadBuiltinSoundfont = async (font) => {
+    if (sfLoading) return;
     try {
       setSfLoading(true);
       setSfProgress({ pct: 0 });
@@ -186,6 +204,7 @@ export default function App() {
       await eng.loadSoundfont(buf);
       setSfName(font.name);
       setSfCached((m) => ({ ...m, [font.id]: true }));
+      assignPendingChannel();
     } catch (err) {
       console.error(err);
       toast(`Couldn't load ${font.name}: ${err.message || err}`);
@@ -196,14 +215,24 @@ export default function App() {
   };
 
   useEffect(() => { engineRef.current?.scheduler?.setBpm?.(bpm); }, [bpm]);
-  useEffect(() => { engineRef.current?.syncChannels(channels); }, [channels]);
+  useEffect(() => {
+    if (engineRef.current) { engineRef.current.syncChannels(channels); return; }
+    // A built-in synth needs the audio graph even though no soundfont was loaded.
+    if (channels.some((c) => c.instrument?.type === "3xosc")) {
+      ensureEngine().then((eng) => {
+        eng.syncChannels(stateRef.current.channels);
+        eng.syncInserts(stateRef.current.inserts);
+      }).catch((err) => console.error(err));
+    }
+  }, [channels, ensureEngine]);
   useEffect(() => { engineRef.current?.syncInserts(inserts); }, [inserts]);
 
   /* ---- note audition: hear notes as you click/place them, muted while the song plays ---- */
   const auditionOn = useCallback((chId, pitch, vel) => {
     if (transportRef.current.playing) return;
-    engineRef.current?.audition(chId, pitch, vel ?? DEFAULT_VEL);
-  }, []);
+    if (engineRef.current?.ready) { engineRef.current.audition(chId, pitch, vel ?? DEFAULT_VEL); return; }
+    ensureEngine().then((eng) => eng.audition(chId, pitch, vel ?? DEFAULT_VEL)).catch(() => {});
+  }, [ensureEngine]);
   const auditionOff = useCallback((chId, pitch) => {
     engineRef.current?.auditionOff(chId, pitch);
   }, []);
@@ -359,22 +388,32 @@ export default function App() {
 
   /* ---- transport ---- */
   const togglePlay = () => {
-    setPlaying((p) => {
-      const next = !p;
-      const tr = transportRef.current;
-      const fromBeats = tr.mode === "pattern" ? (tr.patStart ?? 0) : (tr.startBeats ?? 0);
-      transportRef.current = { ...transportRef.current, playing: next, t0: performance.now(), from: fromBeats };
-      const eng = engineRef.current;
-      if (eng?.ready) {
-        if (next) {
-          eng.play(fromBeats);
-          transportRef.current.getBeats = () => eng.getBeats();     // playheads follow the audio clock
-        } else {
-          eng.stop();
-          delete transportRef.current.getBeats;
-        }
-      }
-      return next;
+    const tr = transportRef.current;
+    const next = !tr.playing;
+    const fromBeats = tr.mode === "pattern" ? (tr.patStart ?? 0) : (tr.startBeats ?? 0);
+    tr.playing = next;
+    tr.t0 = performance.now();
+    tr.from = fromBeats;
+    setPlaying(next);
+
+    if (!next) {
+      engineRef.current?.stop();
+      delete transportRef.current.getBeats;
+      return;
+    }
+    if (fromBeats != null && tr.mode === "song" && clips.length === 0) {
+      toast("No clips in the playlist — switch to PAT to play the open pattern");
+    }
+    // Boot the audio engine on demand — 3xOsc channels need it even with no soundfont loaded.
+    (async () => {
+      const eng = await ensureEngine();
+      eng.syncChannels(stateRef.current.channels);
+      eng.syncInserts(stateRef.current.inserts);
+      await eng.play(fromBeats);
+      transportRef.current.getBeats = () => eng.getBeats();     // playheads follow the audio clock
+    })().catch((err) => {
+      console.error(err);
+      toast(`Audio engine failed to start: ${err.message || err}`);
     });
   };
   const stop = () => {
@@ -417,12 +456,71 @@ export default function App() {
     }
   };
 
-  /* piano-roll scrub: places the pattern marker and flips to PATTERN mode */
-  const scrubPattern = (beats) => {
+  /* Opening the piano roll focuses that pattern. Like FL, it does NOT hijack the
+     transport mode — the PAT/SONG toggle decides what plays. */
+  const focusPattern = (patId) => {
+    setActivePatId(patId);
+    setRollOpen(true);
+    bump("roll");
+  };
+
+  /* untrimmed clips (lenBars == null) follow their pattern's content */
+  const clipLenBars = (c) => c.lenBars ?? patternBars(patterns.find((p) => p.id === c.patternId) || { notes: [] });
+
+  /* FL-style two-way marker mapping between the open pattern and the song.
+     rollToSong: a spot in the pattern → the song position of the clip playing it
+     (nearest clip edge when the spot isn't inside any clip window; null when the
+     pattern isn't placed at all). songToRoll: the inverse, for drawing. */
+  const rollToSong = (patId, patBeats) => {
+    let exact = null, near = null, nearDist = Infinity;
+    for (const c of clips) {
+      if (c.patternId !== patId) continue;
+      const w0 = (c.offsetBars ?? 0) * beatsPerBar;
+      const w1 = w0 + clipLenBars(c) * beatsPerBar;
+      if (patBeats >= w0 && patBeats < w1) {
+        const song = c.startBar * beatsPerBar + (patBeats - w0);
+        if (exact == null || song < exact) exact = song;
+      } else {
+        const cl = clamp(patBeats, w0, Math.max(w0, w1 - 1e-6));
+        const d = Math.abs(cl - patBeats);
+        if (d < nearDist) { nearDist = d; near = c.startBar * beatsPerBar + (cl - w0); }
+      }
+    }
+    return exact ?? near;
+  };
+  const songToRoll = (patId, songBeats) => {
+    const songBars = songBeats / beatsPerBar;
+    for (const c of clips) {
+      if (c.patternId !== patId) continue;
+      if (songBars >= c.startBar && songBars < c.startBar + clipLenBars(c)) {
+        return ((songBars - c.startBar) + (c.offsetBars ?? 0)) * beatsPerBar;
+      }
+    }
+    return null;
+  };
+
+  /* Roll ruler scrub — FL-style: in PAT mode it moves the pattern's own loop
+     marker; in SONG mode it moves the SONG marker to where this spot of the
+     pattern sits in the playlist, so playing from there includes every pattern
+     stacked at that point in the song. */
+  const scrubRoll = (beats) => {
     const b = Math.max(0, beats);
+    if (mode === "song") {
+      const song = rollToSong(activePatId, b);
+      if (song == null) {
+        toast("Pattern isn't placed in the playlist — switch to PAT to loop it");
+        return;
+      }
+      setStartBars(song / beatsPerBar);
+      transportRef.current.startBeats = song;
+      if (transportRef.current.playing) {
+        transportRef.current.t0 = performance.now();
+        transportRef.current.from = song;
+        engineRef.current?.seek(song);
+      }
+      return;
+    }
     setPatStartBeats(b);
-    setMode("pattern");
-    transportRef.current.mode = "pattern";
     transportRef.current.patStart = b;
     if (transportRef.current.playing) {
       transportRef.current.t0 = performance.now();
@@ -430,6 +528,11 @@ export default function App() {
       engineRef.current?.seek(b);
     }
   };
+
+  /* where the roll ruler should draw its marker right now (null = hidden) */
+  const rollMarkerBeats = mode === "pattern"
+    ? patStartBeats
+    : songToRoll(activePatId, startBars * beatsPerBar);
 
   /* ---- patterns ---- */
   const addPattern = () => {
@@ -450,7 +553,7 @@ export default function App() {
   /* ---- channels ---- */
   const addChannel = () => {
     const id = uid();
-    setChannels((cs) => [...cs, { id, name: `Channel ${cs.length + 1}`, vol: 0.8, pan: 0, insert: 0, instrument: null, pitch: 0, attack: 0.5, decay: 0.5, sustain: 0.5, release: 0.5 }]);
+    setChannels((cs) => [...cs, { id, name: `Channel ${cs.length + 1}`, vol: 0.8, pan: 0, insert: 0, instrument: defaultThreeOsc(), pitch: 0, attack: 0.5, decay: 0.5, sustain: 0.5, release: 0.5 }]);
     setActiveChId(id);
   };
   const notesOnChannel = (chId) => patterns.reduce((sum, p) => sum + p.notes.filter((n) => n.ch === chId).length, 0);
@@ -476,7 +579,8 @@ export default function App() {
     const rect = e.currentTarget.getBoundingClientRect();
     const raw = (e.clientX - rect.left) / PL_BAR_W;
     const bar = e.altKey ? Math.max(0, raw) : Math.floor(raw);   // patterns land on whole measures
-    setClips((cs) => [...cs, { id: uid(), patternId: activePat.id, track, startBar: bar, offsetBars: 0, lenBars: patternBars(activePat) }]);
+    // lenBars null = auto: the clip always spans the pattern's full measures, growing with its content
+    setClips((cs) => [...cs, { id: uid(), patternId: activePat.id, track, startBar: bar, offsetBars: 0, lenBars: null }]);
   };
   const onClipDown = (e, clip, defLen) => {
     e.stopPropagation();
@@ -584,7 +688,7 @@ export default function App() {
           <Btn onClick={stop} title="Stop · press again to rewind marker to 1:1">■</Btn>
         </div>
         <div style={{
-          fontFamily: "ui-monospace, monospace", background: "#0a0e18", border: `1px solid ${LINE}`, borderRadius: 4,
+          fontFamily: "ui-monospace, monospace", background: ROLL.lcdBg, border: `1px solid ${LINE}`, borderRadius: 4,
           color: ACCENT2, padding: "4px 10px", fontSize: 12, letterSpacing: 1, textShadow: `0 0 8px ${ACCENT2}66`, display: "flex", gap: 12,
         }}>
           <span>{bpm.toFixed(0)} BPM</span>
@@ -636,7 +740,7 @@ export default function App() {
             {patterns.map((p) => (
               <div key={p.id}
                 onClick={() => setActivePatId(p.id)}
-                onDoubleClick={() => { setActivePatId(p.id); setRollOpen(true); bump("roll"); }}
+                onDoubleClick={() => focusPattern(p.id)}
                 onContextMenu={(e) => { e.preventDefault(); deletePattern(p.id); }}
                 style={{
                   display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", cursor: "pointer",
@@ -720,34 +824,66 @@ export default function App() {
                   <Select value={String(c.insert ?? 0)} width={64}
                     options={[{ value: "0", label: "Master" }, ...[1, 2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: `Ins ${n}` }))]}
                     onChange={(v) => setChannels((cs) => cs.map((x) => x.id === c.id ? { ...x, insert: Number(v) } : x))} />
-                  <select
-                    value={c.instrument?.type === "3xosc" ? "__3xosc"
-                      : c.instrument ? `${c.instrument.bank}:${c.instrument.program}` : ""}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      const inst = v === "__3xosc"
-                        ? defaultThreeOsc()
-                        : (() => {
-                            const p = presets.find((x) => `${x.bank}:${x.program}` === v);
-                            return p ? { bank: p.bank, program: p.program, name: p.name } : null;
-                          })();
-                      setChannels((cs) => cs.map((x) => x.id === c.id ? { ...x, instrument: inst } : x));
-                      if (v === "__3xosc") { setChanSettingsId(c.id); bump("chan"); }
-                    }}
-                    style={{
-                      flex: 1, minWidth: 0, background: PANEL2, color: TEXT,
-                      border: `1px solid ${LINE}`,
-                      borderRadius: 4, fontSize: 10, padding: "3px 6px", cursor: "pointer",
-                    }}>
-                    <option value="">— pick an instrument —</option>
-                    <option value="__3xosc">3xOsc (built-in synth)</option>
-                    {presets.map((p) => (
-                      <option key={`${p.bank}:${p.program}`} value={`${p.bank}:${p.program}`}>
-                        {String(p.bank).padStart(3, "0")}:{String(p.program).padStart(3, "0")} {p.name}
-                      </option>
-                    ))}
-                  </select>
+                  {(() => {
+                    const curVal = c.instrument?.type === "3xosc" ? "__3xosc"
+                      : c.instrument ? `${c.instrument.bank}:${c.instrument.program}` : "";
+                    const sfLoadedButMissing = c.instrument && c.instrument.type !== "3xosc"
+                      && !presets.some((p) => `${p.bank}:${p.program}` === curVal);
+                    return (
+                      <select
+                        value={curVal}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === "__sgm") {
+                            assignSfChRef.current = c.id;
+                            loadBuiltinSoundfont(BUILTIN_SOUNDFONTS[0]);
+                            return;
+                          }
+                          if (v === "__file") {
+                            assignSfChRef.current = c.id;
+                            sfInputRef.current?.click();
+                            return;
+                          }
+                          const inst = v === "__3xosc"
+                            ? defaultThreeOsc()
+                            : (() => {
+                                const p = presets.find((x) => `${x.bank}:${x.program}` === v);
+                                return p ? { bank: p.bank, program: p.program, name: p.name } : null;
+                              })();
+                          setChannels((cs) => cs.map((x) => x.id === c.id ? { ...x, instrument: inst } : x));
+                          if (v === "__3xosc") { setChanSettingsId(c.id); bump("chan"); }
+                        }}
+                        style={{
+                          flex: 1, minWidth: 0, background: PANEL2, color: TEXT,
+                          border: `1px solid ${LINE}`,
+                          borderRadius: 4, fontSize: 10, padding: "3px 6px", cursor: "pointer",
+                        }}>
+                        {curVal === "" && <option value="">— pick an instrument —</option>}
+                        {sfLoadedButMissing && (
+                          <option value={curVal}>{c.instrument.name} (soundfont not loaded)</option>
+                        )}
+                        <option value="__3xosc">3xOsc (built-in synth)</option>
+                        {presets.length > 0 && (
+                          <optgroup label={sfName || "Soundfont"}>
+                            {presets.map((p) => (
+                              <option key={`${p.bank}:${p.program}`} value={`${p.bank}:${p.program}`}>
+                                {String(p.bank).padStart(3, "0")}:{String(p.program).padStart(3, "0")} {p.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        <optgroup label="Add sounds">
+                          {presets.length === 0 && (
+                            <option value="__sgm">
+                              {sfLoading ? "Loading soundfont…" : `SGM soundfont (${sfCached.sgm ? "cached" : "229 MB download"})`}
+                            </option>
+                          )}
+                          <option value="__file">Upload a soundfont (.sf2)…</option>
+                        </optgroup>
+                      </select>
+                    );
+                  })()}
                 </div>
               </div>
             ))}
@@ -798,11 +934,12 @@ export default function App() {
                     onContextMenu={(e) => e.preventDefault()}
                     style={{
                       height: 40, borderBottom: `1px solid ${LINE}55`, position: "relative",
-                      background: t % 2 ? "#161929" : "#181b2d",
+                      background: t % 2 ? ROLL.trackA : ROLL.trackB,
                       backgroundImage: `
                         repeating-linear-gradient(to right, rgba(255,255,255,0.028) 0 ${PL_BAR_W * 4}px, transparent ${PL_BAR_W * 4}px ${PL_BAR_W * 8}px),
                         repeating-linear-gradient(to right, ${LINE}99 0 1px, transparent 1px ${PL_BAR_W}px),
-                        repeating-linear-gradient(to right, ${LINE}40 0 1px, transparent 1px ${beatPx}px)
+                        repeating-linear-gradient(to right, ${LINE}40 0 1px, transparent 1px ${beatPx}px)${snap < 1 ? `,
+                        repeating-linear-gradient(to right, ${LINE}20 0 1px, transparent 1px ${beatPx * snap}px)` : ""}
                       `,
                     }}>
                     {clips.filter((c) => c.track === t).map((c) => {
@@ -820,24 +957,24 @@ export default function App() {
                           onPointerDown={(e) => onClipDown(e, c, defLen)}
                           onPointerMove={onClipMove}
                           onPointerUp={() => { clipDrag.current = null; }}
-                          onDoubleClick={() => { setActivePatId(p.id); setRollOpen(true); bump("roll"); }}
+                          onDoubleClick={() => focusPattern(p.id)}
                           onContextMenu={(e) => { e.preventDefault(); }}
                           style={{
-                            position: "absolute", left: c.startBar * PL_BAR_W, top: 3, height: 33,
-                            width: Math.max(10, lenB * PL_BAR_W - 3), background: `${p.color}2e`, border: `1px solid ${p.color}`,
-                            borderRadius: 4, fontSize: 9, color: p.color, cursor: "grab",
-                            overflow: "hidden", whiteSpace: "nowrap",
+                            position: "absolute", left: c.startBar * PL_BAR_W, top: 0, height: 39,
+                            width: Math.max(10, lenB * PL_BAR_W), background: `${p.color}2e`, border: `1px solid ${p.color}`,
+                            borderRadius: 3, fontSize: 9, color: p.color, cursor: "grab",
+                            overflow: "hidden", whiteSpace: "nowrap", boxSizing: "border-box",
                           }}>
-                          <div style={{ padding: "1px 6px 0", pointerEvents: "none" }}>
+                          <div style={{ padding: "2px 6px 0", pointerEvents: "none" }}>
                             {p.name}{off > 0.001 ? ` ⇥${Number(off.toFixed(2))}` : ""}
                           </div>
-                          <svg viewBox={`0 0 ${lenB * PL_BAR_W} 18`} preserveAspectRatio="none"
-                            style={{ position: "absolute", left: 0, bottom: 1, width: lenB * PL_BAR_W, height: 18, pointerEvents: "none", opacity: 0.85 }}>
+                          <svg viewBox={`0 0 ${lenB * PL_BAR_W} 22`} preserveAspectRatio="none"
+                            style={{ position: "absolute", left: 0, bottom: 1, width: lenB * PL_BAR_W, height: 22, pointerEvents: "none", opacity: 0.85 }}>
                             {p.notes.filter((n) => n.start < w1 && n.start + n.len > w0).map((n) => {
                               /* true musical pixels: 1 bar = PL_BAR_W, so notes never drift as the clip resizes */
                               const x = ((Math.max(n.start, w0) - w0) / beatsPerBar) * PL_BAR_W;
                               const wdt = ((Math.min(n.start + n.len, w1) - Math.max(n.start, w0)) / beatsPerBar) * PL_BAR_W;
-                              const y = ((pHi - n.pitch) / span) * 14 + 1.5;
+                              const y = ((pHi - n.pitch) / span) * 18 + 2;
                               return <rect key={n.id} x={x} y={y} width={Math.max(1, wdt)} height={2.2} fill={p.color} />;
                             })}
                           </svg>
@@ -913,7 +1050,8 @@ export default function App() {
             updateNotes={updateNotes} snap={snap} setSnap={setSnap} beatsPerBar={beatsPerBar}
             clips={clips} transportRef={transportRef} size={rollSize} setSize={setRollSize}
             audition={auditionOn} auditionOff={auditionOff}
-            patStartBeats={patStartBeats} scrubPattern={scrubPattern} patLoopBeats={patLoopBeats} />
+            markerBeats={rollMarkerBeats} scrubRuler={scrubRoll} mode={mode}
+            patLoopBeats={mode === "pattern" ? patLoopBeats : null} />
         </FloatWin>
       )}
 
@@ -924,48 +1062,73 @@ export default function App() {
         const patch = (k, v) => setChannels((cs) => cs.map((x) => x.id === ch.id ? { ...x, [k]: v } : x));
         return (
           <FloatWin title={`CHANNEL — ${ch.name}`} color={ACCENT} x0={340} y0={110}
-            w={ch.instrument?.type === "3xosc" ? 400 : 330}
+            w={ch.instrument?.type === "3xosc" ? 470 : 330}
             z={zOrder.chan} onFocus={() => bump("chan")} onClose={() => setChanSettingsId(null)}>
             {ch.instrument?.type === "3xosc" && (() => {
-              const inst = ch.instrument;
+              const base = defaultThreeOsc();
+              const inst = { ...base, ...ch.instrument, oscs: (ch.instrument.oscs || base.oscs).map((o, i) => ({ ...base.oscs[i], ...o })) };
               const setInst = (patchObj) => setChannels((cs) => cs.map((x) =>
-                x.id === ch.id ? { ...x, instrument: { ...x.instrument, ...patchObj } } : x));
+                x.id === ch.id ? { ...x, instrument: { ...inst, ...patchObj } } : x));
               const setOsc = (i, k, v) => setInst({
                 oscs: inst.oscs.map((o, j) => j === i ? { ...o, [k]: v } : o),
               });
+              const WAVE_LABEL = { sine: "SIN", triangle: "TRI", square: "SQR", sawtooth: "SAW", noise: "NSE" };
               return (
-                <div style={{ borderBottom: `1px solid ${LINE}`, padding: "10px 12px" }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: ACCENT, marginBottom: 8 }}>
-                    3×OSC
+                <div style={{ borderBottom: `1px solid ${LINE}`, padding: "10px 12px", background: BG }}>
+                  <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 2, color: ACCENT }}>3x OSC</span>
+                    <div style={{ flex: 1 }} />
+                    <Btn on={!!inst.osc3AM} onClick={() => setInst({ osc3AM: !inst.osc3AM })}
+                      title="Oscillator 2 amplitude-modulates oscillator 3 (classic FL switch)"
+                      style={{ fontSize: 9, padding: "3px 8px" }}>OSC 3 AM</Btn>
                   </div>
                   {inst.oscs.map((o, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                      <span style={{ fontSize: 9, color: DIM, width: 16 }}>{i + 1}</span>
-                      <Select value={o.wave} width={78}
-                        options={WAVEFORMS.map((w) => ({ value: w, label: w === "sawtooth" ? "saw" : w }))}
-                        onChange={(v) => setOsc(i, "wave", v)} />
-                      <Knob label="CRS" size={26} value={o.coarse} min={-24} max={24}
-                        fmt={(v) => `${v >= 0 ? "+" : ""}${Math.round(v)}`}
-                        onChange={(v) => setOsc(i, "coarse", Math.round(v))} />
-                      <Knob label="FINE" size={26} value={o.fine} min={-100} max={100}
-                        fmt={(v) => `${v >= 0 ? "+" : ""}${Math.round(v)}`}
-                        onChange={(v) => setOsc(i, "fine", v)} />
-                      <Knob label="VOL" size={26} value={o.level} min={0} max={1}
-                        fmt={(v) => `${Math.round(v * 100)}`} onChange={(v) => setOsc(i, "level", v)} />
-                      <Knob label="PAN" size={26} value={o.pan} min={-1} max={1}
-                        fmt={(v) => Math.abs(v) < 0.01 ? "C" : v < 0 ? `${Math.round(-v * 100)}L` : `${Math.round(v * 100)}R`}
-                        onChange={(v) => setOsc(i, "pan", v)} />
+                    <div key={i} style={{ background: PANEL2, borderRadius: 6, padding: "7px 9px", marginBottom: 6, border: `1px solid ${LINE}` }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, color: i === 2 && inst.osc3AM ? ACCENT : DIM, width: 38 }}>
+                          OSC {i + 1}
+                        </span>
+                        {WAVEFORMS.map((w) => (
+                          <Btn key={w} on={o.wave === w} onClick={() => setOsc(i, "wave", w)}
+                            style={{ fontSize: 8, padding: "3px 6px" }}>{WAVE_LABEL[w]}</Btn>
+                        ))}
+                        <div style={{ flex: 1 }} />
+                        <Btn on={!!o.invert} title="Invert polarity"
+                          onClick={() => setOsc(i, "invert", !o.invert)}
+                          style={{ fontSize: 8, padding: "3px 6px" }}>INV</Btn>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                        <Knob label="PAN" size={28} value={o.pan} min={-1} max={1} parse={parsePan}
+                          fmt={(v) => Math.abs(v) < 0.01 ? "C" : v < 0 ? `${Math.round(-v * 100)}L` : `${Math.round(v * 100)}R`}
+                          onChange={(v) => setOsc(i, "pan", v)} />
+                        <Knob label="VOL" size={28} value={o.level} min={0} max={1} parse={(s) => numFrom(s) / 100}
+                          fmt={(v) => `${Math.round(v * 100)}`} onChange={(v) => setOsc(i, "level", v)} />
+                        <Knob label="CRS" size={28} value={o.coarse} min={-24} max={24}
+                          fmt={(v) => `${v >= 0 ? "+" : ""}${Math.round(v)}st`}
+                          onChange={(v) => setOsc(i, "coarse", Math.round(v))} />
+                        <Knob label="FINE" size={28} value={o.fine} min={-100} max={100}
+                          fmt={(v) => `${v >= 0 ? "+" : ""}${Math.round(v)}ct`}
+                          onChange={(v) => setOsc(i, "fine", v)} />
+                        <Knob label="OFS" size={28} value={o.phase ?? 0} min={0} max={1} parse={(s) => numFrom(s) / 100}
+                          fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setOsc(i, "phase", v)} />
+                        <Knob label="DET" size={28} value={o.detune ?? 0} min={0} max={1}
+                          fmt={(v) => `${Math.round(v * 50)}ct`} onChange={(v) => setOsc(i, "detune", v)} />
+                      </div>
                     </div>
                   ))}
-                  <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 6 }}>
-                    <Knob label="ATK" size={30} value={inst.attack} min={0} max={1}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", marginTop: 8 }}>
+                    <span style={{ fontSize: 8, color: DIM, letterSpacing: 1, fontWeight: 700 }}>AMP<br />ENV</span>
+                    <Knob label="ATT" size={30} value={inst.attack} min={0} max={1} parse={(s) => numFrom(s) / 100}
                       fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setInst({ attack: v })} />
-                    <Knob label="DEC" size={30} value={inst.decay} min={0} max={1}
+                    <Knob label="DEC" size={30} value={inst.decay} min={0} max={1} parse={(s) => numFrom(s) / 100}
                       fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setInst({ decay: v })} />
-                    <Knob label="SUS" size={30} value={inst.sustain} min={0} max={1}
+                    <Knob label="SUS" size={30} value={inst.sustain} min={0} max={1} parse={(s) => numFrom(s) / 100}
                       fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setInst({ sustain: v })} />
-                    <Knob label="REL" size={30} value={inst.release} min={0} max={1}
+                    <Knob label="REL" size={30} value={inst.release} min={0} max={1} parse={(s) => numFrom(s) / 100}
                       fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setInst({ release: v })} />
+                  </div>
+                  <div style={{ fontSize: 8, color: DIM, textAlign: "center", marginTop: 6 }}>
+                    OFS = phase offset · DET = stereo detune · INV = polarity invert
                   </div>
                 </div>
               );

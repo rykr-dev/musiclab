@@ -12,6 +12,7 @@
 import { WorkletSynthesizer } from "spessasynth_lib";
 import { createReverbNode } from "./reverb";
 import { Scheduler } from "./scheduler";
+import { ThreeOsc } from "./threeosc";
 
 const MIDI_SLOTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
 
@@ -33,6 +34,9 @@ export class Engine {
     if (this.ctx) return;
     this.ctx = new AudioContext({ sampleRate: 44100 });
     await this.ctx.audioWorklet.addModule("/spessasynth_processor.min.js");
+    // A suspended context never runs the worklet, so the synth's ready signal
+    // would never arrive and loading would hang forever.
+    try { await this.ctx.resume(); } catch { /* needs a user gesture; retried on load */ }
     this.synth = new WorkletSynthesizer(this.ctx);
 
     // build Master + 6 insert strips
@@ -55,10 +59,12 @@ export class Engine {
       this.setPresets(list);
     });
 
-    this.scheduler = new Scheduler(this.ctx, this.synth, this.getState, (chId) => {
-      const node = this.chanNodes.get(chId);
-      return node ? node.midiCh : null;
-    });
+    this.scheduler = new Scheduler(this.ctx, {
+      has: (chId) => this.chanNodes.has(chId),
+      on: (chId, pitch, vel, time) => this.voiceOn(chId, pitch, vel, time),
+      off: (chId, pitch, time) => this.voiceOff(chId, pitch, time),
+      panic: (force) => this.panic(force),
+    }, this.getState);
     this.ready = true;
   }
 
@@ -74,8 +80,18 @@ export class Engine {
 
   async loadSoundfont(arrayBuffer) {
     await this.init();
-    await this.synth.soundBankManager.addSoundBank(arrayBuffer, "main");
-    await this.synth.isReady;
+    try { await this.ctx.resume(); } catch { /* already running */ }
+
+    // Never await the worklet forever — surface a real error instead of hanging.
+    const guard = (p, ms, what) => Promise.race([
+      p,
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out`)), ms)),
+    ]);
+
+    await guard(this.synth.isReady, 20000, "Synth startup");
+    await guard(this.synth.soundBankManager.addSoundBank(arrayBuffer, "main"), 180000, "Soundfont parsing");
+    await guard(this.synth.isReady, 60000, "Soundfont load");
+
     this.setPresets(this.synth.presetList);
     this.syncChannels(this.getState().channels);
     this.onStatus("Soundfont loaded");
@@ -86,16 +102,14 @@ export class Engine {
     let node = this.chanNodes.get(chId);
     if (node) return node;
     const used = new Set([...this.chanNodes.values()].map((n) => n.midiCh));
-    const midiCh = MIDI_SLOTS.find((m) => !used.has(m));
-    if (midiCh == null) {
-      this.onStatus("Audio supports 15 channels for now — extra channels are silent");
-      return null;
-    }
+    const midiCh = MIDI_SLOTS.find((m) => !used.has(m)) ?? null;
     const gain = this.ctx.createGain();
     const pan = this.ctx.createStereoPanner();
     gain.connect(pan);
-    this.synth.connectChannel(gain, midiCh);
-    node = { midiCh, gain, pan, insertId: null, program: null };
+    // Only soundfont channels need a MIDI slot; built-in synths (3xOsc) feed `gain` directly,
+    // so running out of slots doesn't silence them.
+    if (midiCh != null) this.synth.connectChannel(gain, midiCh);
+    node = { midiCh, gain, pan, osc: null, insertId: null, program: null };
     this.chanNodes.set(chId, node);
     return node;
   }
@@ -106,6 +120,7 @@ export class Engine {
     for (const [id, node] of [...this.chanNodes]) {
       if (!channels.some((c) => c.id === id)) {
         this.synth.stopAll(true);
+        node.osc?.dispose();
         try { node.pan.disconnect(); node.gain.disconnect(); } catch { /* already gone */ }
         this.chanNodes.delete(id);
       }
@@ -120,6 +135,22 @@ export class Engine {
         try { node.pan.disconnect(); } catch { /* first connect */ }
         node.pan.connect((this.insertNodes[insertId] || this.insertNodes[0]).input);
         node.insertId = insertId;
+      }
+      if (c.instrument?.type === "3xosc") {
+        if (!node.osc) {
+          node.osc = new ThreeOsc(this.ctx, node.gain);   // sits in front of channel vol/pan
+          node.program = null;
+        }
+        node.osc.setParams(c.instrument);
+        continue;                                          // built-in synth: no MIDI program work
+      }
+      if (node.osc) {                                      // switched back to a soundfont
+        node.osc.dispose();
+        node.osc = null;
+      }
+      if (c.instrument && node.midiCh == null) {
+        this.onStatus("Soundfont channels are limited to 15 — use 3xOsc on extra channels");
+        continue;
       }
       if (c.instrument) {
         const key = `${c.instrument.bank}:${c.instrument.program}`;
@@ -194,18 +225,34 @@ export class Engine {
     inserts.forEach((ins, i) => this.rebuildInsertChain(i, ins));
   }
 
+  /* ---- unified voice routing: soundfont channels vs built-in synths ---- */
+  voiceOn(chId, pitch, vel, time) {
+    const node = this.chanNodes.get(chId);
+    if (!node) return;
+    if (node.osc) node.osc.noteOn(pitch, vel, time);
+    else this.synth.noteOn(node.midiCh, pitch, Math.max(1, Math.min(127, Math.round(vel * 127))),
+      time == null ? undefined : { time });
+  }
+  voiceOff(chId, pitch, time) {
+    const node = this.chanNodes.get(chId);
+    if (!node) return;
+    if (node.osc) node.osc.noteOff(pitch, time);
+    else this.synth.noteOff(node.midiCh, pitch, time == null ? undefined : { time });
+  }
+  panic(force = true) {
+    try { this.synth.stopAll(force); } catch { /* not ready */ }
+    for (const [, node] of this.chanNodes) node.osc?.allOff(force);
+  }
+
   /* ---- note audition (piano roll preview) ---- */
   audition(chId, pitch, vel = 0.78) {
     if (!this.ready) return;
     this.ctx.resume();
     this.syncChannels(this.getState().channels);   // cheap diff; guarantees program/vol/pan are applied
-    const node = this.chanNodes.get(chId);
-    if (!node) return;
-    this.synth.noteOn(node.midiCh, pitch, Math.max(1, Math.min(127, Math.round(vel * 127))));
+    this.voiceOn(chId, pitch, vel);
   }
   auditionOff(chId, pitch) {
-    const node = this.chanNodes.get(chId);
-    if (node) this.synth.noteOff(node.midiCh, pitch);
+    this.voiceOff(chId, pitch);
   }
 
   /* ---- transport ---- */

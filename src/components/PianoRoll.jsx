@@ -43,8 +43,20 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
   };
 
   const beatW = BEAT_W * zoom;
-  const totalBeats = PR_BARS * beatsPerBar;
+  /* Infinite-feeling roll: the canvas grows in 4-bar chunks as you scroll toward
+     the edge, and always covers whatever the pattern already contains. */
+  const [extraBars, setExtraBars] = useState(0);
+  const contentEnd = pattern.notes.reduce((m, n) => Math.max(m, n.start + n.len), 0);
+  const neededBars = Math.ceil(contentEnd / beatsPerBar) + 1;
+  const bars = Math.max(PR_BARS + extraBars, neededBars);
+  const totalBeats = bars * beatsPerBar;
   const W = KEYS_W + totalBeats * beatW;
+  const growIfNearEdge = (el) => {
+    if (!el) return;
+    if (el.scrollLeft + el.clientWidth > W - 260) setExtraBars((b) => b + 4);
+  };
+  const growRef = useRef(growIfNearEdge);
+  growRef.current = growIfNearEdge;
   const H = ROWS * ROW_H;
   const snapV = snap;
   if (lastLen.current == null) lastLen.current = snapV;
@@ -57,8 +69,9 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
     const cv = canvasRef.current;
     if (!cv) return;
     const ctx = cv.getContext("2d");
-    const dpr = window.devicePixelRatio || 1;
-    cv.width = W * dpr; cv.height = H * dpr;
+    // Cap the backing store: browsers refuse to render canvases past ~16-24M pixels.
+    const dpr = Math.max(0.75, Math.min(window.devicePixelRatio || 1, Math.sqrt(16e6 / (W * H))));
+    cv.width = Math.floor(W * dpr); cv.height = Math.floor(H * dpr);
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, H);
 
@@ -147,8 +160,8 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
     const cv = velRef.current;
     if (!cv) return;
     const ctx = cv.getContext("2d");
-    const dpr = window.devicePixelRatio || 1;
-    cv.width = W * dpr; cv.height = VEL_H * dpr;
+    const dpr = Math.max(0.75, Math.min(window.devicePixelRatio || 1, Math.sqrt(16e6 / (W * VEL_H))));
+    cv.width = Math.floor(W * dpr); cv.height = Math.floor(VEL_H * dpr);
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, W, VEL_H);
     ctx.fillStyle = "#12152a";
@@ -371,6 +384,7 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
         if (dx || dy) {
           el.scrollLeft += dx;
           el.scrollTop += dy;
+          if (dx > 0) growRef.current(el);              // dragging past the end: add more measures
           if (velScrollRef.current) velScrollRef.current.scrollLeft = el.scrollLeft;
           applyMoveRef.current(lp.x, lp.y, lp.alt);     // content moved under a still pointer — keep the drag following
         }
@@ -552,7 +566,10 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
         </span>
       </div>
       <div ref={scrollRef}
-        onScroll={(e) => { if (velScrollRef.current) velScrollRef.current.scrollLeft = e.target.scrollLeft; }}
+        onScroll={(e) => {
+          if (velScrollRef.current) velScrollRef.current.scrollLeft = e.target.scrollLeft;
+          growIfNearEdge(e.target);
+        }}
         style={{ width: size.w, height: size.h, overflow: "auto", background: "#141728" }}>
         {/* ruler — click or drag to set the pattern marker (switches transport to PAT mode) */}
         <div className="dragsurface"
@@ -570,7 +587,7 @@ function PianoRoll({ pattern, channels, activeChId, updateNotes, snap, setSnap, 
             position: "sticky", top: 0, zIndex: 6, width: W, height: 18, cursor: "pointer",
             background: PANEL, borderBottom: `1px solid ${LINE}`,
           }}>
-          {Array.from({ length: PR_BARS }, (_, i) => (
+          {Array.from({ length: bars }, (_, i) => (
             <div key={i} style={{
               position: "absolute", left: KEYS_W + i * beatsPerBar * beatW, top: 0,
               width: beatsPerBar * beatW, height: 18, borderLeft: `1px solid ${LINE}`,

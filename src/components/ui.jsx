@@ -124,18 +124,23 @@ function RenameInput({ initial, onDone, width = 110 }) {
 }
 
 /* ================= floating window ================= */
-function FloatWin({ title, color, x0, y0, w, z, onFocus, onClose, children, headerExtras }) {
+function FloatWin({ title, color, x0, y0, w, z, onFocus, onClose, children, headerExtras, maximized, onHeaderDoubleClick }) {
   const [pos, setPos] = useState({ x: x0, y: y0 });
   const drag = useRef(null);
   return (
     <div onPointerDown={onFocus} style={{
-      position: "absolute", left: pos.x, top: pos.y, width: w, zIndex: z,
+      position: "absolute", zIndex: z,
+      ...(maximized
+        ? { left: 8, top: 8, right: 8, bottom: 8, width: "auto" }
+        : { left: pos.x, top: pos.y, width: w }),
       background: PANEL, border: `1px solid ${LINE}`, borderRadius: 8,
       boxShadow: "0 12px 40px rgba(0,0,0,0.55)", overflow: "hidden",
     }}>
       <div
+        onDoubleClick={onHeaderDoubleClick}
         onPointerDown={(e) => {
           e.preventDefault();
+          if (maximized) return;                    // fullscreen windows don't drag
           drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
           e.currentTarget.setPointerCapture(e.pointerId);
         }}
@@ -149,7 +154,8 @@ function FloatWin({ title, color, x0, y0, w, z, onFocus, onClose, children, head
           background: PANEL2, borderBottom: `1px solid ${LINE}`, userSelect: "none", touchAction: "none",
         }}>
         <span style={{ width: 8, height: 8, borderRadius: 2, background: color || ACCENT }} />
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: TEXT, flex: "0 0 auto" }}>{title}</span>
+        <span title={onHeaderDoubleClick ? "Double-click to toggle fullscreen" : undefined}
+          style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: TEXT, flex: "0 0 auto" }}>{title}</span>
         <div style={{ flex: 1, display: "flex", gap: 6, alignItems: "center" }} onPointerDown={(e) => e.stopPropagation()}>
           {headerExtras}
         </div>

@@ -9,11 +9,10 @@ const TICK_MS = 25;
 const LOOKAHEAD_S = 0.18;
 
 export class Scheduler {
-  constructor(ctx, synth, getState, midiChFor) {
+  constructor(ctx, voice, getState) {
     this.ctx = ctx;
-    this.synth = synth;
-    this.getState = getState;   // () => { bpm, beatsPerBar, clips, patterns }
-    this.midiChFor = midiChFor; // (channelId) => midi channel number | null
+    this.voice = voice;         // { on(chId,pitch,vel,time), off(chId,pitch,time), panic(force) }
+    this.getState = getState;   // () => { bpm, beatsPerBar, clips, patterns, mode, ... }
     this.playing = false;
     this.bpm = 140;
     this.anchorBeats = 0;
@@ -47,14 +46,14 @@ export class Scheduler {
 
   seek(beats) {
     if (!this.playing) { this.anchorBeats = beats; return; }
-    this.synth.stopAll(true);
+    this.voice.panic(true);
     this.anchorBeats = beats;
     this.anchorTime = this.ctx.currentTime + 0.25; // runway past the stale-event horizon
     this.scheduledUpTo = beats - 1e-6;             // epsilon: notes exactly AT the seek point must play
     // stale queued events fire within ~180 ms; sweep them just before new notes begin sounding
     const gen = ++this.stopGen;
     for (const ms of [90, 200]) {
-      setTimeout(() => { if (this.stopGen === gen) this.synth.stopAll(true); }, ms);
+      setTimeout(() => { if (this.stopGen === gen) this.voice.panic(true); }, ms);
     }
   }
 
@@ -75,9 +74,9 @@ export class Scheduler {
     // sweep again across the lookahead horizon; the generation guard aborts the
     // sweeps the moment a new play() starts, so fresh playback is never clipped.
     const gen = ++this.stopGen;
-    this.synth.stopAll(true);
+    this.voice.panic(true);
     for (const ms of [70, 150, 240, 330]) {
-      setTimeout(() => { if (this.stopGen === gen && !this.playing) this.synth.stopAll(true); }, ms);
+      setTimeout(() => { if (this.stopGen === gen && !this.playing) this.voice.panic(true); }, ms);
     }
   }
 
@@ -96,12 +95,11 @@ export class Scheduler {
           if (n.start >= loop) continue;                 // past the loop edge
           const songOn = k * loop + n.start;
           if (songOn <= from || songOn > horizon) continue;
-          const midiCh = this.midiChFor(n.ch);
-          if (midiCh == null) continue;
+          if (!this.voice.has(n.ch)) continue;
           const songOff = k * loop + Math.min(n.start + n.len, loop);
-          const vel = Math.max(1, Math.min(127, Math.round((n.vel ?? 0.78) * 127)));
-          this.synth.noteOn(midiCh, n.pitch, vel, { time: this.timeOf(songOn) });
-          this.synth.noteOff(midiCh, n.pitch, { time: this.timeOf(songOff) });
+          const vel = n.vel ?? 0.78;
+          this.voice.on(n.ch, n.pitch, vel, this.timeOf(songOn));
+          this.voice.off(n.ch, n.pitch, this.timeOf(songOff));
         }
       }
     }
@@ -133,13 +131,12 @@ export class Scheduler {
         if (n.start < w0 || n.start >= wEnd) continue;             // must START inside the trim window
         const songOn = clipStart + (n.start - w0);
         if (songOn <= from || songOn > horizon) continue;
-        const midiCh = this.midiChFor(n.ch);
-        if (midiCh == null) continue;
+        if (!this.voice.has(n.ch)) continue;
         const cutEnd = Math.min(n.start + n.len, wEnd);            // clip boundary cuts the tail
         const songOff = clipStart + (cutEnd - w0);
-        const vel = Math.max(1, Math.min(127, Math.round((n.vel ?? 0.78) * 127)));
-        this.synth.noteOn(midiCh, n.pitch, vel, { time: this.timeOf(songOn) });
-        this.synth.noteOff(midiCh, n.pitch, { time: this.timeOf(songOff) });
+        const vel = n.vel ?? 0.78;
+        this.voice.on(n.ch, n.pitch, vel, this.timeOf(songOn));
+        this.voice.off(n.ch, n.pitch, this.timeOf(songOff));
       }
     }
     this.scheduledUpTo = horizon;

@@ -9,6 +9,7 @@ import PianoRoll from "./components/PianoRoll";
 import { Engine } from "./engine/engine";
 import { listSaves, saveLocal, loadLocal, deleteLocal, encodeShare, decodeShare } from "./store";
 import { BUILTIN_SOUNDFONTS, fetchSoundfont, getCached, clearCached } from "./soundfonts";
+import { defaultThreeOsc, WAVEFORMS } from "./engine/threeosc";
 
 /* ================= playlist playhead ================= */
 function Playhead({ transportRef, beatsPerBar }) {
@@ -71,6 +72,19 @@ export default function App() {
   const [patStartBeats, setPatStartBeats] = useState(0);
   const rulerDrag = useRef(false);
   const [rollSize, setRollSize] = useState({ w: 640, h: 330 });
+  const [rollMax, setRollMax] = useState(false);
+  const prevRollSize = useRef(null);
+  const toggleRollMax = () => {
+    setRollMax((m) => {
+      if (!m) {
+        prevRollSize.current = rollSize;
+        setRollSize({ w: Math.max(420, window.innerWidth - 24), h: Math.max(200, window.innerHeight - 250) });
+      } else if (prevRollSize.current) {
+        setRollSize(prevRollSize.current);
+      }
+      return !m;
+    });
+  };
 
   /* ---- audio engine ---- */
   const engineRef = useRef(null);
@@ -132,7 +146,10 @@ export default function App() {
   const ensureEngine = useCallback(async () => {
     if (!engineRef.current) {
       const eng = new Engine(() => stateRef.current, {
-        onPresets: setPresets,
+        onPresets: (list) => {                    // presets arriving means we're done
+          setPresets(list);
+          if (list.length) { setSfLoading(false); setSfProgress(null); }
+        },
         onStatus: (m) => toast(m),
       });
       engineRef.current = eng;
@@ -344,7 +361,8 @@ export default function App() {
   const togglePlay = () => {
     setPlaying((p) => {
       const next = !p;
-      const fromBeats = mode === "pattern" ? patStartBeats : (transportRef.current.startBeats ?? 0);
+      const tr = transportRef.current;
+      const fromBeats = tr.mode === "pattern" ? (tr.patStart ?? 0) : (tr.startBeats ?? 0);
       transportRef.current = { ...transportRef.current, playing: next, t0: performance.now(), from: fromBeats };
       const eng = engineRef.current;
       if (eng?.ready) {
@@ -370,13 +388,15 @@ export default function App() {
       else { transportRef.current.startBeats = 0; setStartBars(0); }
     }
   };
+  const togglePlayRef = useRef(togglePlay);
+  togglePlayRef.current = togglePlay;
   useEffect(() => {                                     // Space = play / stop-to-marker
     const onKey = (e) => {
       if (e.code !== "Space") return;
       const el = document.activeElement;
       if (el && ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(el.tagName)) return;
       e.preventDefault();
-      togglePlay();
+      togglePlayRef.current();                          // always the current closure
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -455,7 +475,7 @@ export default function App() {
     if (e.target.dataset.clip) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const raw = (e.clientX - rect.left) / PL_BAR_W;
-    const bar = e.altKey ? Math.max(0, raw) : plFloor(raw);
+    const bar = e.altKey ? Math.max(0, raw) : Math.floor(raw);   // patterns land on whole measures
     setClips((cs) => [...cs, { id: uid(), patternId: activePat.id, track, startBar: bar, offsetBars: 0, lenBars: patternBars(activePat) }]);
   };
   const onClipDown = (e, clip, defLen) => {
@@ -501,7 +521,7 @@ export default function App() {
       return;
     }
     const rawStart = d.startBar + rawD;
-    const startBar = Math.max(0, free ? rawStart : plSnap(rawStart));  // snap the POSITION, not the delta
+    const startBar = Math.max(0, free ? rawStart : Math.round(rawStart));  // moves stay measure-aligned
     const dTrack = Math.round((e.clientY - d.grabY) / 40);
     setClips((cs) => cs.map((c) => c.id === d.id ? {
       ...c,
@@ -701,21 +721,27 @@ export default function App() {
                     options={[{ value: "0", label: "Master" }, ...[1, 2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: `Ins ${n}` }))]}
                     onChange={(v) => setChannels((cs) => cs.map((x) => x.id === c.id ? { ...x, insert: Number(v) } : x))} />
                   <select
-                    disabled={!presets.length}
-                    value={c.instrument ? `${c.instrument.bank}:${c.instrument.program}` : ""}
+                    value={c.instrument?.type === "3xosc" ? "__3xosc"
+                      : c.instrument ? `${c.instrument.bank}:${c.instrument.program}` : ""}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => {
-                      const p = presets.find((x) => `${x.bank}:${x.program}` === e.target.value);
-                      setChannels((cs) => cs.map((x) => x.id === c.id
-                        ? { ...x, instrument: p ? { bank: p.bank, program: p.program, name: p.name } : null }
-                        : x));
+                      const v = e.target.value;
+                      const inst = v === "__3xosc"
+                        ? defaultThreeOsc()
+                        : (() => {
+                            const p = presets.find((x) => `${x.bank}:${x.program}` === v);
+                            return p ? { bank: p.bank, program: p.program, name: p.name } : null;
+                          })();
+                      setChannels((cs) => cs.map((x) => x.id === c.id ? { ...x, instrument: inst } : x));
+                      if (v === "__3xosc") { setChanSettingsId(c.id); bump("chan"); }
                     }}
                     style={{
-                      flex: 1, minWidth: 0, background: PANEL2, color: presets.length ? TEXT : DIM,
-                      border: `1px ${presets.length ? "solid" : "dashed"} ${LINE}`,
-                      borderRadius: 4, fontSize: 10, padding: "3px 6px", cursor: presets.length ? "pointer" : "default",
+                      flex: 1, minWidth: 0, background: PANEL2, color: TEXT,
+                      border: `1px solid ${LINE}`,
+                      borderRadius: 4, fontSize: 10, padding: "3px 6px", cursor: "pointer",
                     }}>
-                    <option value="">{presets.length ? "— pick an instrument —" : "Load a soundfont first"}</option>
+                    <option value="">— pick an instrument —</option>
+                    <option value="__3xosc">3xOsc (built-in synth)</option>
                     {presets.map((p) => (
                       <option key={`${p.bank}:${p.program}`} value={`${p.bank}:${p.program}`}>
                         {String(p.bank).padStart(3, "0")}:{String(p.program).padStart(3, "0")} {p.name}
@@ -877,6 +903,7 @@ export default function App() {
       {rollOpen && activePat && (
         <FloatWin title={`PIANO ROLL — ${activePat.name}`} color={activePat.color}
           x0={280} y0={60} w={rollSize.w + 4} z={zOrder.roll} onFocus={() => bump("roll")} onClose={() => setRollOpen(false)}
+          maximized={rollMax} onHeaderDoubleClick={toggleRollMax}
           headerExtras={
             <Select value={String(activeChId)} width={110}
               options={channels.map((c) => ({ value: String(c.id), label: c.name }))}
@@ -896,8 +923,53 @@ export default function App() {
         if (!ch) return null;
         const patch = (k, v) => setChannels((cs) => cs.map((x) => x.id === ch.id ? { ...x, [k]: v } : x));
         return (
-          <FloatWin title={`CHANNEL — ${ch.name}`} color={ACCENT} x0={340} y0={140} w={330}
+          <FloatWin title={`CHANNEL — ${ch.name}`} color={ACCENT} x0={340} y0={110}
+            w={ch.instrument?.type === "3xosc" ? 400 : 330}
             z={zOrder.chan} onFocus={() => bump("chan")} onClose={() => setChanSettingsId(null)}>
+            {ch.instrument?.type === "3xosc" && (() => {
+              const inst = ch.instrument;
+              const setInst = (patchObj) => setChannels((cs) => cs.map((x) =>
+                x.id === ch.id ? { ...x, instrument: { ...x.instrument, ...patchObj } } : x));
+              const setOsc = (i, k, v) => setInst({
+                oscs: inst.oscs.map((o, j) => j === i ? { ...o, [k]: v } : o),
+              });
+              return (
+                <div style={{ borderBottom: `1px solid ${LINE}`, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: ACCENT, marginBottom: 8 }}>
+                    3×OSC
+                  </div>
+                  {inst.oscs.map((o, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                      <span style={{ fontSize: 9, color: DIM, width: 16 }}>{i + 1}</span>
+                      <Select value={o.wave} width={78}
+                        options={WAVEFORMS.map((w) => ({ value: w, label: w === "sawtooth" ? "saw" : w }))}
+                        onChange={(v) => setOsc(i, "wave", v)} />
+                      <Knob label="CRS" size={26} value={o.coarse} min={-24} max={24}
+                        fmt={(v) => `${v >= 0 ? "+" : ""}${Math.round(v)}`}
+                        onChange={(v) => setOsc(i, "coarse", Math.round(v))} />
+                      <Knob label="FINE" size={26} value={o.fine} min={-100} max={100}
+                        fmt={(v) => `${v >= 0 ? "+" : ""}${Math.round(v)}`}
+                        onChange={(v) => setOsc(i, "fine", v)} />
+                      <Knob label="VOL" size={26} value={o.level} min={0} max={1}
+                        fmt={(v) => `${Math.round(v * 100)}`} onChange={(v) => setOsc(i, "level", v)} />
+                      <Knob label="PAN" size={26} value={o.pan} min={-1} max={1}
+                        fmt={(v) => Math.abs(v) < 0.01 ? "C" : v < 0 ? `${Math.round(-v * 100)}L` : `${Math.round(v * 100)}R`}
+                        onChange={(v) => setOsc(i, "pan", v)} />
+                    </div>
+                  ))}
+                  <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 6 }}>
+                    <Knob label="ATK" size={30} value={inst.attack} min={0} max={1}
+                      fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setInst({ attack: v })} />
+                    <Knob label="DEC" size={30} value={inst.decay} min={0} max={1}
+                      fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setInst({ decay: v })} />
+                    <Knob label="SUS" size={30} value={inst.sustain} min={0} max={1}
+                      fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setInst({ sustain: v })} />
+                    <Knob label="REL" size={30} value={inst.release} min={0} max={1}
+                      fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => setInst({ release: v })} />
+                  </div>
+                </div>
+              );
+            })()}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 14, padding: 16, justifyContent: "center" }}>
               <Knob label="PITCH" size={44} value={ch.pitch ?? 0} min={-24} max={24}
                 parse={(s) => numFrom(s) / 100}
@@ -912,7 +984,9 @@ export default function App() {
                 fmt={(v) => `${Math.round(v * 100)}%`} onChange={(v) => patch("release", v)} />
             </div>
             <div style={{ fontSize: 9, color: DIM, padding: "0 16px 12px", textAlign: "center" }}>
-              50% = soundfont default · sustain is stored but not yet audible (engine limitation)
+              {ch.instrument?.type === "3xosc"
+                ? "3xOsc uses its own ADSR above — these shape pitch and MIDI envelope offsets"
+                : "50% = soundfont default · sustain is stored but not yet audible (engine limitation)"}
             </div>
           </FloatWin>
         );

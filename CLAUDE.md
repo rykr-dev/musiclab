@@ -26,7 +26,7 @@ Claude; this file is the full context handoff.
 
 - `src/constants.js` — design tokens + type roles. Palette is authored in OKLCH and
   **shipped as hex** (canvas `fillStyle` can't be trusted to parse `oklch()` on older
-  Chromebooks): warm-neutral graphite chrome at hue 75, FL-orange `ACCENT`, VFD-cyan
+  Chromebooks): warm-neutral graphite chrome at hue 75, phosphor-green `ACCENT`, VFD-cyan
   `ACCENT2` for readouts/playheads, `ON_ACCENT` for text on an orange fill. `ROLL`
   holds the canvas-drawn roll/playlist surface colors. `NOTE_COLORS` sit at uniform
   OKLCH lightness (0.785) so no note shouts, and skip hue 190–215° so none collides

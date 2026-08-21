@@ -7,9 +7,10 @@
    near-achromatic on purpose so that hue only ever means something — orange is
    "this is active", cyan is "this is the machine reporting back".
 
-   ACCENT keeps FL's orange (the incumbent identity). ACCENT2 is a vacuum-
-   fluorescent cyan rather than a mint: hardware sequencers paired amber LEDs with
-   VFD readouts, and it separates the transport display from every note colour. */
+   ACCENT is oscilloscope phosphor green — the LAB half of the name, and the hue
+   sitting furthest from both the cyan readouts and the red danger state, so the
+   three signals never get mistaken for one another. ACCENT2 is a vacuum-fluorescent
+   cyan rather than a mint: it keeps the transport display distinct from the notes. */
 const BG = "#11100e";
 const PANEL = "#1d1b18";
 const PANEL2 = "#292724";
@@ -17,22 +18,22 @@ const RAISED = "#393632";
 const LINE = "#403d39";
 const TEXT = "#e2e0dc";
 const DIM = "#a6a39d";      // 4.78:1 on RAISED, the tightest pairing it has to survive
-const ACCENT = "#ff9430";   // FL orange — active states
+const ACCENT = "#87c946";   // phosphor green — active states
 const ACCENT2 = "#92f1f6";  // VFD cyan — readouts / playheads
 const DANGER = "#f64e4d";
-const ON_ACCENT = "#1e1006"; // text on an orange fill — 8.4:1
+const ON_ACCENT = "#0f1708"; // text on an accent fill — 9.1:1
 
 /* Pattern + note colours share one ramp: uniform OKLCH lightness (0.785) so no
    colour shouts louder than another on the roll, hues spaced around the wheel but
    skipping 190–215° — that window belongs to the playhead, and a note wearing it
    would swallow the line. Index 0 is the accent, so untouched notes read as brand.
    Index 11 is a warm off-white for anyone who wants no colour at all. */
-const PATTERN_COLORS = ["#ff9e4d", "#b1c549", "#13d7ae", "#36c9ff", "#a8b2ff", "#ee94e6", "#e1b22a", "#cca2ff"];
+const PATTERN_COLORS = ["#94cd62", "#00cdfb", "#adb0ff", "#f990d4", "#ff9b74", "#cdbc31", "#45d69b", "#d99bfe"];
 
 const NOTE_COLORS = [
-  "#ff9e4d", "#e1b22a", "#b1c549", "#6ed380",
-  "#13d7ae", "#36c9ff", "#83bdff", "#a8b2ff",
-  "#cca2ff", "#ee94e6", "#ff91bc", "#d4d0c8",
+  "#94cd62", "#45d69b", "#00cdfb", "#83bdff",
+  "#adb0ff", "#d99bfe", "#f990d4", "#ff95a3",
+  "#ff9b74", "#f3a737", "#cdbc31", "#d4d0c8",
 ];
 
 /* piano-roll / playlist surface colors (canvas-drawn, so they live here) */
@@ -41,7 +42,7 @@ const ROLL = {
   rowBlack: "#161513", rowWhite: "#1e1c1a",
   octaveLine: "#4c4844",
   barLine: "#5c5954", beatLine: "#33312e", subLine: "#23211f",
-  hoverRow: "rgba(255,148,48,0.07)",
+  hoverRow: "rgba(135,201,70,0.07)",
   ghost: "rgba(214,206,193,0.22)",
   keyWhite: "#e4dfd5", keyBlack: "#201e1b", keyTextWhite: "#4b4742",
   velBg: "#0b0a08", velBar: "#504c48", velBeat: "#1c1a18",

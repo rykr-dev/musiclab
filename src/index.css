@@ -55,8 +55,8 @@ select option { background: #292724; color: #e2e0dc; }
 
 /* ================= browser surfaces =================
    Selection, caret, scrollbars and focus ship in nobody's palette by default. */
-::selection { background: rgba(255, 148, 48, 0.3); color: #fff; }
-input, textarea { caret-color: #ff9430; }
+::selection { background: rgba(135, 201, 70, 0.3); color: #fff; }
+input, textarea { caret-color: #87c946; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: #16140f; }
@@ -65,8 +65,8 @@ input, textarea { caret-color: #ff9430; }
 ::-webkit-scrollbar-corner { background: #16140f; }
 * { scrollbar-color: #403d39 #16140f; }
 
-/* Cyan, not orange: focus is the machine telling you where you are, and orange
-   already means "this control is engaged". */
+/* Cyan, not the accent: focus is the machine telling you where you are, and the
+   accent already means "this control is engaged". */
 :focus-visible { outline: 2px solid #92f1f6; outline-offset: 1px; border-radius: 3px; }
 
 html, body { overscroll-behavior: none; }

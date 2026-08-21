@@ -1,3 +1,8 @@
 node_modules
 dist
 .DS_Store
+
+# Machine-specific tool state (settings.local.json hardcodes an absolute home path)
+.claude/settings.local.json
+.impeccable/config.local.json
+.impeccable/live/sessions/

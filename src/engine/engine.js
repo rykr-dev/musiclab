@@ -28,6 +28,8 @@ export class Engine {
     this.presets = [];
     this.chanNodes = new Map();   // channelId -> { midiCh, gain, pan, insertId, program }
     this.insertNodes = [];        // index-aligned with state inserts (0 = Master)
+    this.synthClockOffset = 0;    // see trackSynthClock()
+    this.clockSamples = [];
   }
 
   async init() {
@@ -70,6 +72,24 @@ export class Engine {
       this.synthPromise = (async () => {
         await this.ctx.audioWorklet.addModule("/spessasynth_processor.min.js");
         const synth = new WorkletSynthesizer(this.ctx);
+        // Every message the worklet posts is stamped with the processor's clock,
+        // but the library's event API drops that field, so read the port directly.
+        // Wrap rather than replace: the lib's own handler must still run.
+        // `worklet` is TS-protected, not private at runtime — but if a future
+        // version of the library renames it, fall back to uncompensated timing
+        // rather than breaking playback outright.
+        const port = synth.worklet?.port;
+        if (port) {
+          const libHandler = port.onmessage;
+          port.onmessage = (e) => {
+            const t = e.data?.currentTime;
+            if (typeof t === "number" && Number.isFinite(t)) this.trackSynthClock(t);
+            libHandler?.call(port, e);
+          };
+        } else {
+          console.warn("[music lab] no worklet port to read the synth clock from; " +
+            "soundfont note timing will not be drift-compensated.");
+        }
         synth.eventHandler.addEvent("presetListChange", "musiclab", (l) => this.setPresets(l));
         this.synth = synth;
         for (const [, node] of this.chanNodes) {          // hook up channels created earlier
@@ -79,6 +99,36 @@ export class Engine {
       })().catch((err) => { this.synthPromise = null; throw err; });
     }
     return this.synthPromise;
+  }
+
+  /* ---- soundfont clock drift ----
+     SpessaSynth queues timed events against the PROCESSOR's own clock, which is
+     seeded once at construction and then advanced purely by rendered samples
+     (`currentTime += sampleCount * sampleTime`). It never resyncs to the
+     AudioContext. So any stall of the audio render thread leaves that clock
+     permanently behind real time — and parsing a large .sf2 happens inside the
+     worklet, which is exactly such a stall. A note stamped for absolute time T
+     then waits for the lagging clock to reach T and sounds late by the length of
+     the stall, while 3xOsc (native nodes on the real context clock) stays on the
+     beat. That is the rhythm drift.
+
+     The library already solves this for its Worker variant — WorkerSynthesizer
+     keeps `timeOffset = message.currentTime - context.currentTime` and offsets
+     everything by it. WorkletSynthesizer simply assumes the two clocks stay
+     locked. We measure the same offset from the messages the worklet stamps.
+
+     Delivery to the main thread only ever COSTS time, so any single reading is
+     biased low (too negative). The true offset is the maximum across a short
+     window, which also lets a genuine new stall pull the estimate down once the
+     stale samples age out. */
+  trackSynthClock(synthTime) {
+    const now = this.ctx.currentTime;
+    const s = this.clockSamples;
+    s.push({ at: now, off: synthTime - now });
+    while (s.length && now - s[0].at > 2) s.shift();
+    let max = -Infinity;
+    for (const x of s) if (x.off > max) max = x.off;
+    if (Number.isFinite(max)) this.synthClockOffset = max;
   }
 
   setPresets(list) {
@@ -108,6 +158,11 @@ export class Engine {
 
     this.setPresets(this.synth.presetList);
     this.syncChannels(this.getState().channels);
+    const driftMs = Math.round(-this.synthClockOffset * 1000);
+    if (driftMs > 5) {
+      console.info(`[music lab] soundfont worklet clock is ${driftMs} ms behind the audio ` +
+        `context (the .sf2 parse stalled the render thread); note timing is compensated by that much.`);
+    }
     this.onStatus("Soundfont loaded");
   }
 
@@ -248,7 +303,7 @@ export class Engine {
     if (node.osc) node.osc.noteOn(pitch, vel, time);
     else if (this.synth && node.midiCh != null) {
       this.synth.noteOn(node.midiCh, pitch, Math.max(1, Math.min(127, Math.round(vel * 127))),
-        time == null ? undefined : { time });
+        time == null ? undefined : { time: time + this.synthClockOffset });
     }
   }
   voiceOff(chId, pitch, time) {
@@ -256,7 +311,8 @@ export class Engine {
     if (!node) return;
     if (node.osc) node.osc.noteOff(pitch, time);
     else if (this.synth && node.midiCh != null) {
-      this.synth.noteOff(node.midiCh, pitch, time == null ? undefined : { time });
+      this.synth.noteOff(node.midiCh, pitch,
+        time == null ? undefined : { time: time + this.synthClockOffset });
     }
   }
   panic(force = true) {
